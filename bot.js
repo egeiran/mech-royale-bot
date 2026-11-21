@@ -4174,6 +4174,22 @@ class Executor {
     const sw = P.strafeSpeed;
     let mx = ux * radial - uy * side * sw;
     let my = uy * radial + ux * side * sw;
+    if (P.kiteAwayW > 0 && !e.npc && bb.nEn > 1) {
+      let ax = 0, ay = 0;
+      for (let i = 0;i < bb.nEn; i++) {
+        const o = bb.en[i];
+        if (o === e || o.dist > 160)
+          continue;
+        const w = 1 / (o.dist + 15);
+        ax -= (o.x - bb.x) / Math.max(1, o.dist) * w;
+        ay -= (o.y - bb.y) / Math.max(1, o.dist) * w;
+      }
+      const al = Math.hypot(ax, ay);
+      if (al > 0.000001) {
+        mx += ax / al * P.kiteAwayW;
+        my += ay / al * P.kiteAwayW;
+      }
+    }
     const zm = bb.zone.margin(bb.x, bb.y);
     if (zm < P.zoneMargin) {
       const cx = bb.zone.ncx - bb.x, cy = bb.zone.ncy - bb.y;
@@ -6098,6 +6114,7 @@ var DEFAULTS = {
   engageDist: 250,
   engageHurtDist: 999,
   kiteBoostGap: 999,
+  kiteAwayW: 0,
   kiteBoostEnergy: 25,
   approachBoostDist: 999,
   approachBoostEnergy: 35,
@@ -6106,6 +6123,7 @@ var DEFAULTS = {
   lootClearDist: 0,
   lootClearMax: 90,
   duelLtgDist: 0,
+  duelLaserDist: 0,
   seekHp: 0.6,
   idleHold: 0,
   seekSoundS: 0,
@@ -6699,7 +6717,7 @@ function travelPace(bb, x, y) {
     return PACE_WALK;
   return Math.hypot(x - bb.x, y - bb.y) > bb.P.boostTravelDist ? PACE_BOOST : PACE_WALK;
 }
-function bestWeapon(bb, maxDist, sc) {
+function bestWeapon(bb, maxDist, sc, wk) {
   const items = bb.loot.items;
   let bd = maxDist;
   sc.wpn = null;
@@ -6707,7 +6725,7 @@ function bestWeapon(bb, maxDist, sc) {
     const p = items[i];
     if (p.type !== L_PICKUP || p.badUntil > bb.t)
       continue;
-    if (p.wk !== W_LIGHTNING)
+    if (p.wk !== wk)
       continue;
     if (pickupValue(bb, p.wk) <= 0)
       continue;
@@ -6931,7 +6949,7 @@ function decideSquad(bb, mv, sc) {
   const engD = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist;
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2);
   if (target && engaged) {
-    if (P.duelLtgDist > 0 && bestWeapon(bb, P.duelLtgDist, sc)) {
+    if (P.duelLtgDist > 0 && bestWeapon(bb, P.duelLtgDist, sc, W_LIGHTNING) || P.duelLaserDist > 0 && !bb.haveLaser && bestWeapon(bb, P.duelLaserDist, sc, W_LASER)) {
       sc.lc.item = sc.wpn;
       sc.lc.npc = null;
       lootIntent(bb, sc.lc, it, PACE_WALK);
@@ -8920,5 +8938,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-style1d.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0 } });
+// src/entries/pj-style1e.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25 } });

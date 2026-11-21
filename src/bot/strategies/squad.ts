@@ -9,7 +9,7 @@
  *   5. loot                   -> weapons (lightning first), cubes, crates, NPC drones
  *   6. nothing                -> drift to a good spot in the next circle, scanning
  */
-import { Track, W_LIGHTNING } from "../perception/tracker.ts"
+import { Track, W_LASER, W_LIGHTNING } from "../perception/tracker.ts"
 import { S_BOOST, S_CRATE, S_GUN, S_JET, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_MORTAR, S_NPC_GUN, S_RELOAD, S_STEP } from "../perception/sounds.ts"
 import { L_PICKUP, type Blackboard, type LootItem } from "../brain/blackboard.ts"
 import { FACE_SCAN, FACE_THREATS, PACE_BOOST, PACE_WALK, STYLE_PUSH, STYLE_SPOT, type Intent } from "../brain/intent.ts"
@@ -47,15 +47,15 @@ function travelPace(bb: Blackboard, x: number, y: number): number {
   return Math.hypot(x - bb.x, y - bb.y) > bb.P.boostTravelDist ? PACE_BOOST : PACE_WALK
 }
 
-/** nearest known ground-level lightning pickup we want (value > 0) within maxDist, into sc.wpn */
-function bestWeapon(bb: Blackboard, maxDist: number, sc: SquadScratch): boolean {
+/** nearest known ground-level pickup of kind wk that we want (value > 0) within maxDist, into sc.wpn */
+function bestWeapon(bb: Blackboard, maxDist: number, sc: SquadScratch, wk: number): boolean {
   const items = bb.loot.items
   let bd = maxDist
   sc.wpn = null
   for (let i = 0; i < items.length; i++) {
     const p = items[i]
     if (p.type !== L_PICKUP || p.badUntil > bb.t) continue
-    if (p.wk !== W_LIGHTNING) continue
+    if (p.wk !== wk) continue
     if (pickupValue(bb, p.wk) <= 0) continue
     if (p.z - bb.z > 3) continue // roofs: not in the middle of a fight
     const d = Math.hypot(p.x - bb.x, p.y - bb.y)
@@ -293,7 +293,7 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2)
   if (target && engaged) {
     // a known lightning (or, without one, a wanted weapon) further away: worth leaving the duel range for
-    if (P.duelLtgDist > 0 && bestWeapon(bb, P.duelLtgDist, sc)) {
+    if ((P.duelLtgDist > 0 && bestWeapon(bb, P.duelLtgDist, sc, W_LIGHTNING)) || (P.duelLaserDist > 0 && !bb.haveLaser && bestWeapon(bb, P.duelLaserDist, sc, W_LASER))) {
       sc.lc.item = sc.wpn
       sc.lc.npc = null
       lootIntent(bb, sc.lc, it, PACE_WALK)

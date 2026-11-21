@@ -483,6 +483,23 @@ export class Executor {
     const sw = P.strafeSpeed
     let mx = ux * radial - uy * side * sw
     let my = uy * radial + ux * side * sw
+    // several mechs: drift away from the others (distance-weighted centroid) so they stay in front of us and
+    // arrive one at a time instead of closing the ring
+    if (P.kiteAwayW > 0 && !e.npc && bb.nEn > 1) {
+      let ax = 0, ay = 0
+      for (let i = 0; i < bb.nEn; i++) {
+        const o = bb.en[i]
+        if (o === e || o.dist > 160) continue
+        const w = 1 / (o.dist + 15)
+        ax -= ((o.x - bb.x) / Math.max(1, o.dist)) * w
+        ay -= ((o.y - bb.y) / Math.max(1, o.dist)) * w
+      }
+      const al = Math.hypot(ax, ay)
+      if (al > 1e-6) {
+        mx += (ax / al) * P.kiteAwayW
+        my += (ay / al) * P.kiteAwayW
+      }
+    }
     // stay inside the circle
     const zm = bb.zone.margin(bb.x, bb.y)
     if (zm < P.zoneMargin) {

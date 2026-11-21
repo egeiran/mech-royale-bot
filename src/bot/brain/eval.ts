@@ -138,7 +138,7 @@ function probed(seed: number, tl: boolean): { factory: BotFactory; probe: Probe 
         if (b.bb.nSeeing > 0) probe.seenBy++
         if (probe.ltgT < 0 && b.bb.haveLightning) probe.ltgT = obs.t
         if (probe.ltgSeenT < 0) {
-          for (const p of obs.pickups) if (p.kind === "lightning") {
+          for (const p of obs.pickups) if (p.kind === (params.style === 1 ? "laser" : "lightning")) {
             probe.ltgSeenT = obs.t
             probe.ltgSeenD = Math.hypot(p.pos[0] - obs.self.pos[0], p.pos[1] - obs.self.pos[1])
           }

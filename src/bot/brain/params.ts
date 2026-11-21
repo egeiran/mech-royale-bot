@@ -42,6 +42,9 @@ export const DEFAULTS = {
   /** boost away along the most open direction when the target is closer than the preferred range by more than
    *  this (needs kiteBoostEnergy). 999 = off: neutral-to-negative against the league squad (96 seeds). */
   kiteBoostGap: 999,
+  /** duel footwork with several mechs in sight: weight of a drift away from the others (0 = off, 1 = as strong as
+   *  the strafe) */
+  kiteAwayW: 0,
   kiteBoostEnergy: 25,
   /** boost toward a target further than this (closing time is time under fire without dealing damage) */
   approachBoostDist: 999,
@@ -56,6 +59,8 @@ export const DEFAULTS = {
   lootClearMax: 90,
   /** in a duel, go for a known ground-level lightning pickup within this distance (0 = off) */
   duelLtgDist: 0,
+  /** ... and for a laser (when we hold none) within this distance (0 = off) */
+  duelLaserDist: 0,
   /** SQUAD: with at least this HP fraction and nobody in sight, go and look for the next mech */
   seekHp: 0.6,
   /** SQUAD: nothing to loot and nobody in sight -> hold position and scan instead of seeking / exploring (1) */
