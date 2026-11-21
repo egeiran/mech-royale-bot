@@ -221,6 +221,8 @@ export class GridWorld implements World {
   }
 
   solid(x: number, y: number, z: number): boolean {
+    // nothing is solid outside the grid rectangle (same convention as raycast)
+    if (x < this.minX || x >= this.maxX || y < this.minY || y >= this.maxY) return false
     if (z < bilinear(this.terrain, this.nx, this.ny, x - this.minX, y - this.minY)) return true
     const c = this.cellIndex(x, y)
     const e = this.spanStart[c + 1]!
@@ -322,7 +324,23 @@ export class GridWorld implements World {
         } else {
           const fOut = zOut - bilinear(h, nx, ny, px + dx * tOut, py + dy * tOut)
           if (fOut < 0) {
-            const th = t + ((tOut - t) * fIn) / (fIn - fOut)
+            // the ground along the ray is quadratic inside a cell (and very steep in places): bisect the crossing
+            let lo = t
+            let hi = tOut
+            let flo = fIn
+            let fhi = fOut
+            for (let it = 0; it < 6; it++) {
+              const mid = 0.5 * (lo + hi)
+              const fm = oz + dz * mid - bilinear(h, nx, ny, px + dx * mid, py + dy * mid)
+              if (fm < 0) {
+                hi = mid
+                fhi = fm
+              } else {
+                lo = mid
+                flo = fm
+              }
+            }
+            const th = lo + ((hi - lo) * flo) / (flo - fhi)
             if (th < best) {
               best = th
               kind = HIT_TERRAIN

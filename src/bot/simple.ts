@@ -23,6 +23,8 @@ export const simpleBot: BotFactory = (ctx: BotContext): Bot => {
   const P = ctx.params
   const prefDist = P.prefDist ?? 55
   const retreatHp = P.retreatHp ?? 0.3
+  const seekLightning = (P.seekLightning ?? 0) > 0
+  const farm = (P.farm ?? 1) > 0
   const dt = cfg.match.decide_every / cfg.match.tick_hz
   let strafeSign = rng.next() < 0.5 ? 1 : -1
   let strafeUntil = 0
@@ -194,12 +196,14 @@ export const simpleBot: BotFactory = (ctx: BotContext): Bot => {
             goalD = d
           }
         }
-        if (!w1) {
+        if (!w1 || (seekLightning && w1.kind === "laser")) {
           for (const p of obs.pickups) {
             if (p.kind === "mortar" || p.kind === "gun") continue
+            if (w1 && p.kind !== "lightning") continue
             const d = Math.hypot(p.pos[0] - x, p.pos[1] - y)
-            if (d < bd + 20 && Math.abs(p.pos[2] - z) < 6) {
-              bd = d - 20
+            const bonus = seekLightning && p.kind === "lightning" ? 60 : 20
+            if (d < bd + bonus && Math.abs(p.pos[2] - z) < 6) {
+              bd = d - bonus
               gx = p.pos[0]
               gy = p.pos[1]
               haveGoal = true
@@ -210,7 +214,7 @@ export const simpleBot: BotFactory = (ctx: BotContext): Bot => {
       }
       // shoot crates / NPCs for cubes when safe
       let shot = false
-      if (w0?.kind === "gun" && (w0.reload ?? 0) <= 0 && me.hp > me.max_hp * 0.5) {
+      if (farm && w0?.kind === "gun" && (w0.reload ?? 0) <= 0 && me.hp > me.max_hp * 0.5) {
         let tgt: { pos: number[]; h: number; r: number; vel?: number[] } | null = null
         let td = 70
         for (const c of obs.crates) {
@@ -258,12 +262,14 @@ export const simpleBot: BotFactory = (ctx: BotContext): Bot => {
     }
 
     // ---- pickups in reach
-    if (!w1) {
+    if (!w1 || (seekLightning && w1.kind === "laser" && (w1.charge ?? 0) === 0)) {
       const reach = cfg.loot.pickup_radius
       for (const p of obs.pickups) {
         if (p.kind === "mortar" || p.kind === "gun") continue
+        if (w1 && p.kind !== "lightning") continue
         if (Math.hypot(p.pos[0] - x, p.pos[1] - y) < reach && Math.abs(p.pos[2] - z) < 4) {
           a.take = p.id
+          if (w1) a.drop = 1
           break
         }
       }

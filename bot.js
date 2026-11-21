@@ -107,6 +107,8 @@ var simpleBot = (ctx) => {
   const P = ctx.params;
   const prefDist = P.prefDist ?? 55;
   const retreatHp = P.retreatHp ?? 0.3;
+  const seekLightning = (P.seekLightning ?? 0) > 0;
+  const farm = (P.farm ?? 1) > 0;
   const dt = cfg.match.decide_every / cfg.match.tick_hz;
   let strafeSign = rng.next() < 0.5 ? 1 : -1;
   let strafeUntil = 0;
@@ -267,13 +269,16 @@ var simpleBot = (ctx) => {
             goalD = d;
           }
         }
-        if (!w1) {
+        if (!w1 || seekLightning && w1.kind === "laser") {
           for (const p of obs.pickups) {
             if (p.kind === "mortar" || p.kind === "gun")
               continue;
+            if (w1 && p.kind !== "lightning")
+              continue;
             const d = Math.hypot(p.pos[0] - x, p.pos[1] - y);
-            if (d < bd + 20 && Math.abs(p.pos[2] - z) < 6) {
-              bd = d - 20;
+            const bonus = seekLightning && p.kind === "lightning" ? 60 : 20;
+            if (d < bd + bonus && Math.abs(p.pos[2] - z) < 6) {
+              bd = d - bonus;
               gx = p.pos[0];
               gy = p.pos[1];
               haveGoal = true;
@@ -283,7 +288,7 @@ var simpleBot = (ctx) => {
         }
       }
       let shot = false;
-      if (w0?.kind === "gun" && (w0.reload ?? 0) <= 0 && me.hp > me.max_hp * 0.5) {
+      if (farm && w0?.kind === "gun" && (w0.reload ?? 0) <= 0 && me.hp > me.max_hp * 0.5) {
         let tgt = null;
         let td = 70;
         for (const c of obs.crates) {
@@ -333,13 +338,17 @@ var simpleBot = (ctx) => {
       if (w0?.kind === "gun" && !fire[0] && (w0.ammo ?? 12) < (w0.stats.mag ?? 12) * 0.5 && (w0.reload ?? 0) <= 0)
         a.reload = true;
     }
-    if (!w1) {
+    if (!w1 || seekLightning && w1.kind === "laser" && (w1.charge ?? 0) === 0) {
       const reach = cfg.loot.pickup_radius;
       for (const p of obs.pickups) {
         if (p.kind === "mortar" || p.kind === "gun")
           continue;
+        if (w1 && p.kind !== "lightning")
+          continue;
         if (Math.hypot(p.pos[0] - x, p.pos[1] - y) < reach && Math.abs(p.pos[2] - z) < 4) {
           a.take = p.id;
+          if (w1)
+            a.drop = 1;
           break;
         }
       }
@@ -512,5 +521,5 @@ function runProcess(opts) {
   });
 }
 
-// src/entries/simple-far.ts
-runProcess({ name: "ai-caramba", factory: simpleBot, params: { prefDist: 95, gunMaxDist: 200 } });
+// src/entries/p5-d12.ts
+runProcess({ name: "ai-caramba", factory: simpleBot, params: { prefDist: 12 } });
