@@ -9,14 +9,14 @@
  *   5. loot                   -> weapons (lightning first), cubes, crates, NPC drones
  *   6. nothing                -> drift to a good spot in the next circle, scanning
  */
-import { Track } from "../perception/tracker.ts"
+import { Track, W_LIGHTNING } from "../perception/tracker.ts"
 import { S_BOOST, S_CRATE, S_GUN, S_JET, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_MORTAR, S_NPC_GUN, S_RELOAD, S_STEP } from "../perception/sounds.ts"
-import type { Blackboard } from "../brain/blackboard.ts"
+import { L_PICKUP, type Blackboard, type LootItem } from "../brain/blackboard.ts"
 import { FACE_SCAN, FACE_THREATS, PACE_BOOST, PACE_WALK, STYLE_PUSH, STYLE_SPOT, type Intent } from "../brain/intent.ts"
 import { newSpot, type Mover } from "../brain/navx.ts"
 import { decideFfa } from "./ffa.ts"
 import {
-  bestLoot, duelRange, fightRatio, healUntil, lootIntent, newLootChoice, newZoneGoal, pickTarget, wantDrop, weaponReflex, zoneDuty, zoneIntent,
+  bestLoot, duelRange, fightRatio, healUntil, lootIntent, newLootChoice, newZoneGoal, pickTarget, pickupValue, wantDrop, weaponReflex, zoneDuty, zoneIntent,
 } from "./common.ts"
 
 export class SquadScratch {
@@ -33,6 +33,7 @@ export class SquadScratch {
   /** kills so far (kill events) and the latched "survivor" mode (play the ghost to outlast the squad) */
   kills = 0
   ghost = false
+  wpn: LootItem | null = null
   ghostHeal = false
   /** peek spot (fight several mechs from a point only the target has a line to) */
   readonly peek = newSpot()
@@ -44,6 +45,26 @@ export class SquadScratch {
 function travelPace(bb: Blackboard, x: number, y: number): number {
   if (bb.nEn > 0 || bb.energy < bb.P.boostMinEnergy) return PACE_WALK
   return Math.hypot(x - bb.x, y - bb.y) > bb.P.boostTravelDist ? PACE_BOOST : PACE_WALK
+}
+
+/** nearest known ground-level lightning pickup we want (value > 0) within maxDist, into sc.wpn */
+function bestWeapon(bb: Blackboard, maxDist: number, sc: SquadScratch): boolean {
+  const items = bb.loot.items
+  let bd = maxDist
+  sc.wpn = null
+  for (let i = 0; i < items.length; i++) {
+    const p = items[i]
+    if (p.type !== L_PICKUP || p.badUntil > bb.t) continue
+    if (p.wk !== W_LIGHTNING) continue
+    if (pickupValue(bb, p.wk) <= 0) continue
+    if (p.z - bb.z > 3) continue // roofs: not in the middle of a fight
+    const d = Math.hypot(p.x - bb.x, p.y - bb.y)
+    if (d < bd && bb.zone.margin(p.x, p.y) > 6) {
+      bd = d
+      sc.wpn = p
+    }
+  }
+  return sc.wpn !== null
 }
 
 /** sound kinds that mean "an armed mech is (or just was) there" */
@@ -262,6 +283,17 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
   const engD = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2)
   if (target && engaged) {
+    // a known lightning (or, without one, a wanted weapon) further away: worth leaving the duel range for
+    if (P.duelLtgDist > 0 && bestWeapon(bb, P.duelLtgDist, sc)) {
+      sc.lc.item = sc.wpn
+      sc.lc.npc = null
+      lootIntent(bb, sc.lc, it, PACE_WALK)
+      it.targetId = target.id
+      it.face = FACE_THREATS
+      it.label = "grabW"
+      weaponReflex(bb, it)
+      return it
+    }
     // kills drop cubes + 2 right where we fight: +4 % HP (healed) and damage each. Wanted weapons too.
     if (P.duelLootDist > 0 && bestLoot(bb, true, P.duelLootDist, sc.lc) && sc.lc.item) {
       lootIntent(bb, sc.lc, it, PACE_WALK)

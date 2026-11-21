@@ -6090,6 +6090,7 @@ var DEFAULTS = {
   approachBoostEnergy: 35,
   lightningKeepEnergy: 75,
   duelLootDist: 32,
+  duelLtgDist: 0,
   seekHp: 0.6,
   seekSoundS: 0,
   reloadFarDist: 999,
@@ -6637,6 +6638,7 @@ class SquadScratch {
   sndY = 0;
   kills = 0;
   ghost = false;
+  wpn = null;
   ghostHeal = false;
   peek = newSpot();
   peekT = -1e9;
@@ -6646,6 +6648,28 @@ function travelPace(bb, x, y) {
   if (bb.nEn > 0 || bb.energy < bb.P.boostMinEnergy)
     return PACE_WALK;
   return Math.hypot(x - bb.x, y - bb.y) > bb.P.boostTravelDist ? PACE_BOOST : PACE_WALK;
+}
+function bestWeapon(bb, maxDist, sc) {
+  const items = bb.loot.items;
+  let bd = maxDist;
+  sc.wpn = null;
+  for (let i = 0;i < items.length; i++) {
+    const p = items[i];
+    if (p.type !== L_PICKUP || p.badUntil > bb.t)
+      continue;
+    if (p.wk !== W_LIGHTNING)
+      continue;
+    if (pickupValue(bb, p.wk) <= 0)
+      continue;
+    if (p.z - bb.z > 3)
+      continue;
+    const d = Math.hypot(p.x - bb.x, p.y - bb.y);
+    if (d < bd && bb.zone.margin(p.x, p.y) > 6) {
+      bd = d;
+      sc.wpn = p;
+    }
+  }
+  return sc.wpn !== null;
 }
 var MECH_SOUND = new Uint8Array(16);
 for (const k of [S_GUN, S_MORTAR, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_CRATE, S_NPC_GUN, S_STEP, S_BOOST, S_JET, S_RELOAD])
@@ -6849,6 +6873,16 @@ function decideSquad(bb, mv, sc) {
   const engD = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist;
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2);
   if (target && engaged) {
+    if (P.duelLtgDist > 0 && bestWeapon(bb, P.duelLtgDist, sc)) {
+      sc.lc.item = sc.wpn;
+      sc.lc.npc = null;
+      lootIntent(bb, sc.lc, it, PACE_WALK);
+      it.targetId = target.id;
+      it.face = FACE_THREATS;
+      it.label = "grabW";
+      weaponReflex(bb, it);
+      return it;
+    }
     if (P.duelLootDist > 0 && bestLoot(bb, true, P.duelLootDist, sc.lc) && sc.lc.item) {
       lootIntent(bb, sc.lc, it, PACE_WALK);
       it.targetId = target.id;
@@ -8814,5 +8848,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-tempo2.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { seekSoundS: 8, npcFirstDist: 45, squadRegenUntil: 0.7, lootTimeCost: 0.5, dropFightLeadS: 0 } });
+// src/entries/pj-laserkite.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { valLaser: 60, valLightning: 15, valSwapToLightning: 0, rangeGun: 75, rangeKite: 75, rangeVsLightning: 75, rangeLaserVsMortar: 75 } });

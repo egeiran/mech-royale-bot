@@ -44,6 +44,8 @@ export const DEFAULTS = {
   lightningKeepEnergy: 75,
   /** in a duel, still pick up cubes / wanted weapons lying within this distance (kills drop cubes + 2) */
   duelLootDist: 32,
+  /** in a duel, go for a known ground-level lightning pickup within this distance (0 = off) */
+  duelLtgDist: 0,
   /** SQUAD: with at least this HP fraction and nobody in sight, go and look for the next mech */
   seekHp: 0.6,
   /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
