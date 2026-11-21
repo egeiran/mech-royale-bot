@@ -276,6 +276,11 @@ export class Executor {
         else if (tgt && this.noLosSince >= 0 && bb.t - this.noLosSince >= P.reloadNoLosS && ammo <= P.reloadLowAmmo) a.reload = true
         else if (!tgt && bb.nEn === 0 && ammo <= P.reloadLowAmmo) a.reload = true
       }
+      // full magazine before contact: the approach is the cheapest moment to reload
+      if (tgt && !tgt.npc && tgt.dist > P.reloadFarDist && ammo < mag * P.reloadIdleFrac && ammo > 0) {
+        a.reload = true
+        fire[bb.gunSlot] = false
+      }
     }
 
     // ---- weapons on the ground
@@ -372,11 +377,16 @@ export class Executor {
         return
       }
       this.gotoMove(e.x, e.y, e.z, false, Math.min(R, 10))
+      if (!e.npc && d > P.approachBoostDist && bb.grounded && !this.mv.noBoost && bb.energy > (bb.haveLightning ? P.lightningKeepEnergy : P.approachBoostEnergy)) this.boost = true
       return
     }
     if (!hold && d > R + 18) {
       // far: approach along the path, weaving when the enemy has a line on us
       this.gotoMove(e.x, e.y, e.z, false, R)
+      if (!e.npc && d > P.approachBoostDist && bb.grounded && !this.mv.noBoost && bb.energy > (bb.haveLightning ? P.lightningKeepEnergy : P.approachBoostEnergy)) {
+        this.boost = true
+        return
+      }
       const side = this.jitter.step(bb.t, bb.rng, ux, uy, this.blockedFn)
       const bx = this.mx - uy * side * 0.55, by = this.my + ux * side * 0.55
       const l = Math.hypot(bx, by)
@@ -388,7 +398,33 @@ export class Executor {
     }
     let radial = 0
     if (!hold) radial = d > R + P.rangeBand ? 1 : d < R - P.rangeBand ? -1 : (0.5 * (d - R)) / P.rangeBand
-    const side = this.jitter.step(bb.t, bb.rng, ux, uy, this.blockedFn)
+    let side = this.jitter.step(bb.t, bb.rng, ux, uy, this.blockedFn)
+    // several enemies: orbit so that the target stands between us and the others (their shots hit it, not us)
+    if (P.shieldOrbit > 0 && !e.npc && bb.nEn > 1 && d < 60) {
+      let ox = 0, oy = 0, ow = 0
+      for (let i = 0; i < bb.nEn; i++) {
+        const o = bb.en[i]
+        if (o === e || bb.los[o.id] !== 1 || o.dist > 150) continue
+        const w = 1 / (o.dist + 10)
+        ox += o.x * w
+        oy += o.y * w
+        ow += w
+      }
+      if (ow > 0) {
+        ox /= ow
+        oy /= ow
+        const want = Math.atan2(e.y - oy, e.x - ox) // from the others through the target
+        const have = Math.atan2(bb.y - e.y, bb.x - e.x)
+        const diff = wrapPi(want - have)
+        if (Math.abs(diff) > P.shieldOrbit) {
+          const s2 = diff > 0 ? -1 : 1
+          if (!this.blockedFn(-uy * s2, ux * s2)) {
+            side = s2
+            this.jitter.sign = s2
+          }
+        }
+      }
+    }
     const sw = P.strafeSpeed
     let mx = ux * radial - uy * side * sw
     let my = uy * radial + ux * side * sw

@@ -4,7 +4,7 @@
 import type { Bot, BotAction, BotContext, BotFactory, Observation } from "../../contracts.ts"
 import { Blackboard, MODE_SQUAD } from "./blackboard.ts"
 import { Executor } from "./execute.ts"
-import { KIND_NAMES, type Intent } from "./intent.ts"
+import { K_LOOT, KIND_NAMES, type Intent } from "./intent.ts"
 import { Mover } from "./navx.ts"
 import { resolveParams } from "./params.ts"
 import { pickUpgrade } from "../strategies/common.ts"
@@ -35,6 +35,11 @@ export function createBrain(ctx: BotContext): BrainBot {
     else it = decideFfa(bb, mover, sc) // FFA, and the UNKNOWN opening
     last = it
     const a = exec.run(it)
+    // a loot goal the planner cannot reach is dropped for a while (roof without energy, sealed courtyard, ...)
+    if (it.kind === K_LOOT && mover.unreachable && mover.dist > it.arrive + 3) {
+      const item = bb.loot.get(bb.mem.lootId)
+      if (item && Math.hypot(item.x - it.gx, item.y - it.gy) < 1) item.badUntil = obs.t + 25
+    }
     if (obs.offer) a.pick = pickUpgrade(bb, obs.offer)
     return a
   }

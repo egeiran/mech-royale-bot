@@ -138,6 +138,14 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
   const target = pickTarget(bb)
   const zl = zoneDuty(bb, sc.zg)
 
+  // 0. opening: one full turn on the spot shows every pickup / crate / mech within 200 m before we commit
+  if (bb.t < P.openScanS && !target && bb.t - bb.tHurt > 2 && zl < 2) {
+    it.hold(bb.x, bb.y, bb.z, "scan")
+    it.face = FACE_SCAN
+    weaponReflex(bb, it)
+    return it
+  }
+
   // 1. zone
   if (zl >= 2) {
     zoneIntent(bb, sc.zg, it, target)
@@ -151,7 +159,7 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     const d = bb.drops[di]
     const dist = Math.hypot(d.pos[0] - bb.x, d.pos[1] - bb.y)
     // in a duel only when it is close (walking away from a fight shows our side for too long)
-    if (!target || bb.nThreats === 0 || dist < 35) {
+    if (!target || bb.nThreats === 0 || dist < 35 || (bb.hpFrac < 0.75 && dist < 150)) {
       it.capture(d.pos[0], d.pos[1], d.pos[2], target || dist < 40 ? PACE_WALK : PACE_BOOST, "drop")
       it.face = FACE_THREATS
       if (target) it.targetId = target.id
@@ -163,6 +171,15 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
   // 3. fight: whoever engages us, or is close; a far mech that ignores us is only shot at in passing
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < P.engageDist || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2)
   if (target && engaged) {
+    // kills drop cubes + 2 right where we fight: +4 % HP (healed) and damage each. Wanted weapons too.
+    if (P.duelLootDist > 0 && bestLoot(bb, true, P.duelLootDist, sc.lc) && sc.lc.item) {
+      lootIntent(bb, sc.lc, it, PACE_WALK)
+      it.targetId = target.id
+      it.face = FACE_THREATS
+      it.label = "grab"
+      weaponReflex(bb, it)
+      return it
+    }
     duelIntent(bb, mv, sc, it, target, true)
     weaponReflex(bb, it)
     return it
@@ -199,7 +216,28 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     return it
   }
 
-  // 6. explore inside the next circle (finds loot; keeps us moving)
+  // 6. healthy and alone: go and find the next mech (kill tempo) - the freshest known position
+  if (bb.hpFrac >= P.seekHp) {
+    let lead: Track | null = null
+    const trs = bb.tracker.mechs
+    for (let i = 0; i < trs.length; i++) {
+      const e = trs[i]
+      if (!e.known || e.dead || e.id === bb.me.id) continue
+      const age = e.age(bb.t)
+      if (age > 45 || bb.zone.margin(e.x, e.y) < 10) continue
+      if (e.dist < 12 && age > 3) continue // been there, nobody home
+      if (!lead || age + e.dist / 12 < lead.age(bb.t) + lead.dist / 12) lead = e
+    }
+    if (lead) {
+      it.goto(lead.x, lead.y, lead.z, PACE_WALK, "seek")
+      it.arrive = 6
+      it.allowJet = false
+      weaponReflex(bb, it)
+      return it
+    }
+  }
+
+  // 7. explore inside the next circle (finds loot; keeps us moving)
   if (bb.t >= m.n2 || Math.hypot(m.n0 - bb.x, m.n1 - bb.y) < 8 || bb.zone.marginNext(m.n0, m.n1) < 10) {
     const a = bb.rng.next() * Math.PI * 2
     const r = Math.sqrt(bb.rng.next()) * bb.zone.nr * 0.75

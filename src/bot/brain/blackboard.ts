@@ -30,6 +30,8 @@ export class LootItem {
   tSeen = -1e9
   /** consecutive observations in which it should have been visible but was not listed */
   miss = 0
+  /** no path to it was found: ignore it as a goal until this time */
+  badUntil = -1
 }
 
 const ITEM_H = [2.4, 1.0, 1.0]
@@ -52,6 +54,7 @@ export class LootMemory {
       it.type = type
       it.wk = 0
       it.hp = 0
+      it.badUntil = -1
       this.byId.set(id, it)
       this.items.push(it)
     }
@@ -365,6 +368,7 @@ export class Blackboard {
       }
     }
     if (this.quietDeaths >= 2 || (this.quietDeaths >= 1 && obs.t < this.P.ffaEarlyT) || this.otherDeaths >= this.P.ffaOtherDeaths) this.ffaLatched = true
+    if (this.modeDet.logOdds >= this.P.ffaSoftLatch) this.ffaLatched = true
     let mode = MODE_UNKNOWN
     if (this.ffaLatched) mode = MODE_FFA
     else if (det === MODE_SQUAD || obs.t >= this.P.unknownSquadAfter) mode = MODE_SQUAD

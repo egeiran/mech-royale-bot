@@ -7,33 +7,53 @@ export const DEFAULTS = {
   /** 0 = auto (perception/mode.ts), 1 = force SQUAD, 2 = force FFA */
   forceMode: 0,
   /** no decisive FFA evidence (a death by another hand) by this time: play SQUAD; before it: ghost opening */
-  unknownSquadAfter: 12,
+  unknownSquadAfter: 0,
   /** a death by another hand counts as "quiet" (FFA evidence) when we dealt/took no damage for this long */
   quietDeathS: 6,
   /** one quiet death before this time is enough for FFA (later: two) */
   ffaEarlyT: 45,
   /** this many deaths by another hand (quiet or not) also mean FFA */
   ffaOtherDeaths: 5,
+  /** also latch FFA when the soft detector (perception/mode.ts log-odds) reaches this; 99 = off (its cues fire
+   *  in squad matches too: hp drops, cross aim, far sounds reached +7.7 in a league squad match) */
+  ffaSoftLatch: 99,
 
   // ---------------------------------------------------------------- engagement range
   /** preferred duel distance with gun only */
-  rangeGun: 115,
+  rangeGun: 14,
   /** preferred duel distance when we hold lightning (inside its 45 m range) */
-  rangeLightning: 22,
+  rangeLightning: 14,
   /** preferred distance when the enemy holds lightning and we do not (stay outside its arc) */
-  rangeVsLightning: 58,
+  rangeVsLightning: 14,
   /** preferred distance with a laser against an enemy that holds a mortar (cook-off) */
-  rangeLaserVsMortar: 70,
+  rangeLaserVsMortar: 14,
   /** preferred distance when the enemy holds a mortar and we have no laser (hug: its splash hurts it) */
-  rangeVsMortar: 16,
+  rangeVsMortar: 12,
   /** SQUAD: a visible mech that is not engaging us is only duelled inside this distance */
-  engageDist: 90,
+  engageDist: 250,
   /** boost away along the most open direction when the target is closer than the preferred range by more than
    *  this (needs kiteBoostEnergy). 999 = off: neutral-to-negative against the league squad (96 seeds). */
   kiteBoostGap: 999,
   kiteBoostEnergy: 25,
+  /** boost toward a target further than this (closing time is time under fire without dealing damage) */
+  approachBoostDist: 999,
+  /** ... while energy is above this (above lightningKeepEnergy when we hold lightning) */
+  approachBoostEnergy: 35,
+  lightningKeepEnergy: 75,
+  /** in a duel, still pick up cubes / wanted weapons lying within this distance (kills drop cubes + 2) */
+  duelLootDist: 32,
+  /** SQUAD: with at least this HP fraction and nobody in sight, go and look for the next mech */
+  seekHp: 0.6,
+  /** SQUAD: reload before contact when the target is further than this and the mag is below reloadIdleFrac
+   *  (999 = off: -0.5 against the league squad, it kept interrupting the approach fire) */
+  reloadFarDist: 999,
+  /** with several enemies in sight, orbit the target until it stands between us and the others; this is the
+   *  angular tolerance (rad) inside which we stop orbiting and strafe randomly. 0 = off */
+  shieldOrbit: 0.3,
+  /** SQUAD opening: spin on the spot for this long (one turn = 1.9 s) to see all loot around before moving */
+  openScanS: 1.9,
   /** kite style: preferred distance */
-  rangeKite: 75,
+  rangeKite: 14,
   /** width of the dead band around the preferred range in which we only strafe */
   rangeBand: 5,
   /** fraction of full speed used for strafing (1 = full) */
@@ -115,11 +135,11 @@ export const DEFAULTS = {
   /** value of an NPC (2 cubes) */
   valNpc: 13,
   /** value of the weapons when the slot is empty */
-  valLightning: 40,
+  valLightning: 45,
   valLaser: 22,
   valMortar: 0,
   /** value of swapping laser -> lightning / mortar -> anything */
-  valSwapToLightning: 14,
+  valSwapToLightning: 28,
   valSwapFromMortar: 20,
   /** utility lost per second of travel */
   lootTimeCost: 1.0,
@@ -179,6 +199,50 @@ export const DEFAULTS = {
   ffaLootDist: 90,
   /** FFA: only loot when no enemy has been known within this distance in the last 10 s */
   ffaLootEnemyClear: 130,
+  // ---- FFA v2 (src/bot/strategies/ffa_v2.ts, owned by the FFA agent; plan: data/intel/ffa-plan.md)
+  /** FFA strategy version: 1 = ffa_v1.ts (ghost v1), 2 = ffa_v2.ts (phased ghost) */
+  ffaVersion: 1,
+  /** pocket search: max straight-line travel (m) and margin kept inside the next circle */
+  ffaSpotMaxDist: 150,
+  ffaSpotMargin: 12,
+  /** pocket re-rank: the best K static spots get a nav path; cost = exposed s on the path + W * static score */
+  ffaSpotTopK: 6,
+  ffaSpotScoreW: 60,
+  /** pocket choice: weight of travel time (s) in the re-rank */
+  ffaSpotTimeW: 0.3,
+  /** pace to the pocket: 0 silent, 1 walk, 2 boost */
+  ffaTravelPace: 1,
+  /** discovered: covered point search radius (m) of safeDirection */
+  ffaBreakMaxDist: 52,
+  /** discovered: fight when the finder is inside this distance and no covered point is within ffaCloseBreak m */
+  ffaCloseDist: 45,
+  ffaCloseBreak: 14,
+  /** discovered: return fire while breaking LOS when the shooter is inside this distance */
+  ffaReturnFireDist: 60,
+  /** after breaking LOS: stay hidden (still, healing) this long */
+  ffaHideS: 30,
+  /** a sighting by a mech that is not aiming at us only counts within this distance */
+  ffaSeenDist: 230,
+  /** a visible mech with a line to us (could see us if it turned) inside this distance: step out of its line */
+  ffaDuckDist: 160,
+  /** third-party: a visible mech below this HP fraction inside ffaThirdDist while we are above ffaThirdHp */
+  ffaThirdHp: 0.6,
+  ffaThirdTargetHp: 0.35,
+  ffaThirdDist: 120,
+  /** opening/holding pickups: laser / lightning within this distance whose spot has exposure below ffaPickupExpo */
+  ffaPickupDist: 35,
+  ffaPickupExpo: 0.2,
+  /** end-game: alive at or below this -> hunt / third-party when HP fraction >= ffaEndHp */
+  ffaEndAlive: 4,
+  ffaEndHp: 0.85,
+  /** end-game: walk toward the freshest fight until this far from it */
+  ffaEndApproach: 110,
+  /** end-game master switch (0 = v1 behaviour: duel only at ffaDuelAlive) */
+  ffaEndHunt: 1,
+  /** after a hide: stay at the covered point when its static exposure is below this (0 = always re-pick a pocket) */
+  ffaStayExpo: 0,
+  /** nobody known near for 10 s: silent loot like v1 (bestLoot within ffaLootDist) - 0 off, 1 on */
+  ffaCalmLoot: 0,
   /** known-enemy memory horizon for avoidance */
   enemyMemoryS: 20,
 
@@ -188,7 +252,7 @@ export const DEFAULTS = {
   /** replan at least every this many decisions */
   replanTicks: 40,
   /** A* expansion bound per plan */
-  navMaxExp: 20000,
+  navMaxExp: 14000,
   /** arrive distance for goto */
   arriveDist: 2.0,
   /** allow jets in plans when energy is above this */

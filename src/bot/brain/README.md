@@ -30,21 +30,17 @@ All state lives on the instance (16 bots share the process in the sim); only sta
 ## Decision flow
 Mode (blackboard.ts): **FFA** latches on deaths our own fight cannot explain: 2 "quiet" deaths (by another hand
 while we dealt/took no damage for `quietDeathS`), 1 before `ffaEarlyT`, or `ffaOtherDeaths` in total (hunters'
-stray bullets do kill squad mates, so one death proves nothing). Otherwise **SQUAD** once the detector says so or
-`unknownSquadAfter` (12 s) has passed; before that UNKNOWN = ghost opening (break LOS, silent loot).
-- **SQUAD** (`decideSquad`): 1 zone urgent → rotate (boost outside), keep shooting; 2 supply drop reachable → capture
-  (strafe inside the ring, keep shooting); 3 mech engaging us or within `engageDist` → duel at `duelRange`
-  (gun `rangeGun` = 115 m kite: the house bots' linear lead fails at range; lightning 22 m only against a single
-  enemy; vs lightning 58 m), break LOS to reload, disengage to
-  cover and regenerate when the race is lost (`squadDisengage*`); 4 shot by an NPC → kill it; by an unseen mech →
-  face the bearing, take cover; 5 loot by value − time (lightning > laser > cubes > crates > NPCs; only silent
-  loot while hurt); 6 explore inside the next circle, scanning.
-- **FFA** (`decideFfa`, "ghost"): 1 zone; 2 end game (alive ≤ `ffaDuelAlive` or radius ≤ `ffaDuelRadius`) → duelist;
-  3 found (shot / aimed at with a line) → fight only if cornered (< `ffaCorneredDist`, or fleeing failed for
-  `ffaFleePatience`), clearly winning (`ffaFightRatio`) or the enemy is nearly dead; else break LOS (findCover),
-  returning fire; 4 we see someone who has not found us → ambush only a nearly dead one, else step out of its
-  sight lines and hold, tracking it; 5 nobody: silent loot nearby (weapons, cubes; no gunfire), then walk to the
-  best hide spot (low exposure, far from known enemies/noise/NPCs, inside the next circle) and hold, scanning.
+stray bullets do kill squad mates, so one death proves nothing). Otherwise **SQUAD** from `unknownSquadAfter`
+(default 0 = from the first tick; a positive value plays `decideFfa` as the opening until then).
+- **SQUAD** (`decideSquad`, kill tempo at close range - real scorer: 14 m 4.48 vs 115 m 4.02):
+  1 zone urgent -> rotate (boost outside), keep shooting; 2 supply drop reachable -> capture (strafe inside the
+  ring, keep shooting); 3 any visible mech (`engageDist` 250) -> if a cube / wanted weapon lies within
+  `duelLootDist` grab it while shooting (kills drop cubes + 2), else duel at `duelRange` (14 m; gun + lightning);
+  with several enemies orbit so the target shields us (`shieldOrbit`); disengage to cover when the race is lost
+  (`squadDisengage*`, no measurable effect on the real scorer); 4 shot by an NPC -> kill it; by an unseen mech ->
+  face the bearing, take cover; 5 loot by value - time (lightning > laser > cubes > crates > NPCs; silent loot
+  only while hurt); 6 healthy (`seekHp`) and alone -> walk to the freshest known enemy position; 7 explore.
+- **FFA** (`decideFfa`, owned by the FFA agent - see ffa.ts): ghost first, duelist (`duelIntent`) as fallback.
 
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
@@ -64,13 +60,13 @@ Prints per match: place, score, kills, death time and cause (attackers × weapon
 summary: mean ± se, exceptions, stuck episodes, decision ms. Also: `bun src/league/batch.ts --candidate main ...`.
 
 ## Known weaknesses (ranked by expected score impact)
-1. SQUAD: we die to the 2nd/3rd simultaneous hunter at ~100 s (zone closing = no room to kite). No corner play
-   (one LOS at a time), kiting has no route planning (backs into walls: ~1 stuck second per 7 matches, then the
-   hop-out reflex), kill cubes lie 115 m away and are rarely collected, drops are skipped under fire.
-2. Loadout/economy timing is naive: no rush for lightning/laser before the first hunter, crates farmed only when
-   calm, mortar never used, laser vs lightning preference untested on the real scorer.
-3. FFA ghost: ~1/3 of sim matches still die before 60 s (found at spawn in the open, then a 50/50 duel); hide
-   spots are ground-only (no roofs), no prediction of where hunters come from, no ambush logic for the last duel.
-4. Regeneration: we rarely get 5 quiet seconds; no deliberate "break contact → heal → re-engage" loop that works.
-5. Everything is tuned on our own sim (simpleBot / league imitations), not on the real scorer; `rangeGun`,
-   `engageDist`, `unknownSquadAfter`, `val*` are the first params to probe with real submissions.
+1. SQUAD: every close duel is a damage race we only win through loadout (lightning in ~50 % of sim matches,
+   mean t = 24 s) and cubes; nothing yet makes the hunters miss or lets only one of them shoot (no corner play,
+   `shieldOrbit` is a first step). Death is by 2-3 simultaneous hunters at ~60-100 s.
+2. The league squad sim has the WRONG SIGN for engagement distance (it prefers 115 m, reality prefers 14 m);
+   only loadout/loot/tempo/robustness conclusions from it are trusted. Each such change still needs a real probe.
+3. No working heal loop (needs 5 s without dealing or taking damage; hunters walk straight at us), drops are
+   taken only when calm, hurt (< 75 % HP within 150 m) or within 35 m.
+4. Opening: no deliberate lightning rush beyond loot value - a 360 deg scan and a known-roof/jet plan are missing.
+5. Fight footwork is still built for dodging (random strafe) although nothing dodges at 14 m; duel movement
+   blocked by mechs/crates (not in the nav map) costs ~1 stuck second per 10-30 matches (then the hop-out reflex).

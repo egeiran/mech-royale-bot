@@ -203,7 +203,7 @@ export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, o
   for (let i = 0; i < items.length; i++) {
     const it = items[i]
     const d = Math.hypot(it.x - bb.x, it.y - bb.y)
-    if (d > maxDist) continue
+    if (d > maxDist || it.badUntil > bb.t) continue
     let val = 0
     let extra = 0
     if (it.type === L_CUBE) val = P.valCube * cubeMult

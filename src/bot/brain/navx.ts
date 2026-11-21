@@ -94,6 +94,8 @@ export class Mover {
   arrived = false
   /** the path does not reach the goal */
   incomplete = false
+  /** the last plan did not reach its goal (unreachable, or the search budget ran out) */
+  unreachable = false
   /** the follower is on a jet leg or waiting for energy: callers must not add their own boost */
   noBoost = false
   /** counters for the eval */
@@ -198,14 +200,20 @@ export class Mover {
         q.height = bb.height
         q.allowJet = allowJet
         q.energy = Math.max(bb.energy, bb.maxEnergy * 0.95)
-        q.maxExpansions = P.navMaxExp
+        // budget grows with the distance: a nearby goal that needs a huge search is unreachable anyway
+        const cap = Math.min(P.navMaxExp, Math.round(2500 + 70 * d))
+        q.maxExpansions = cap
         q.avoid = this.stuckFor >= 1 ? this.follower : undefined
         const p = nav.plan(bb.x, bb.y, bb.z, gx, gy, gz, q, this.path ?? undefined)
         this.plans++
         if (p) {
           this.path = p
           this.havePath = true
-        } else this.havePath = false
+          this.unreachable = !p.complete
+        } else {
+          this.havePath = false
+          this.unreachable = false
+        }
         this.goalX = gx
         this.goalY = gy
         this.goalZ = gz
