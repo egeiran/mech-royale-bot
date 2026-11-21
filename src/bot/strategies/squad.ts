@@ -11,7 +11,7 @@
  */
 import { Track, W_LASER, W_LIGHTNING } from "../perception/tracker.ts"
 import { S_BOOST, S_CRATE, S_GUN, S_JET, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_MORTAR, S_NPC_GUN, S_RELOAD, S_STEP } from "../perception/sounds.ts"
-import { L_PICKUP, type Blackboard, type LootItem } from "../brain/blackboard.ts"
+import { L_PICKUP, MODE_FFA, type Blackboard, type LootItem } from "../brain/blackboard.ts"
 import { FACE_SCAN, FACE_THREATS, PACE_BOOST, PACE_WALK, STYLE_PUSH, STYLE_SPOT, type Intent } from "../brain/intent.ts"
 import { newSpot, type Mover } from "../brain/navx.ts"
 import { decideFfa } from "./ffa.ts"
@@ -47,6 +47,9 @@ export class SquadScratch {
   peekOk = false
   /** opening jet scan: 0 not started, 1 climbing, 2 falling (still scanning), 3 done */
   js = 0
+  /** UNKNOWN-phase restraint (openPassiveS) active this decision / a fight branch was taken */
+  passive = false
+  fought = false
 }
 
 /** boost on long trips with nobody in sight (tempo) while energy is plentiful */
@@ -334,6 +337,25 @@ export function underFire(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Inten
 
 export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   const P = bb.P
+  // UNKNOWN-phase restraint (openPassiveS, off by default): until the mode is settled (FFA latch / squad lock) or
+  // openPassiveS, start no fight beyond openEngageDist with a mech that is not on us, do not walk to enemies or
+  // sounds, and hold fire on mechs that are not on us (in an FFA every early fight costs places; data/intel/final-plan.md)
+  sc.passive = P.openPassiveS > 0 && bb.t < P.openPassiveS && !bb.squadLocked && bb.mode !== MODE_FFA
+  sc.fought = false
+  const it = decideSquadCore(bb, mv, sc)
+  if (sc.passive && !sc.fought && it.weaponsFree && it.targetId >= 0 && it.targetId < 100) {
+    let threat = false
+    for (let i = 0; i < bb.nEn; i++) {
+      const e = bb.en[i]
+      if (e.id === it.targetId) threat = bb.t - e.tShotAtUs < 3 || (e.aimingAtUs && bb.los[e.id] === 1) || e.dist < P.openEngageDist
+    }
+    if (!threat) it.weaponsFree = false
+  }
+  return it
+}
+
+function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
+  const P = bb.P
   const m = bb.mem
   const evs = bb.obs.events
   for (let i = 0; i < evs.length; i++) if (evs[i].type === "kill") sc.kills++
@@ -420,9 +442,11 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
 
   // 3. fight: whoever engages us, or is close; a far mech that ignores us is only shot at in passing
   // hurt: leave mechs that have not noticed us alone unless they are close (time to regenerate first)
-  const engD = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist
+  const engD0 = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist
+  const engD = sc.passive ? Math.min(engD0, P.openEngageDist) : engD0
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2)
   if (target && engaged) {
+    sc.fought = true
     // no laser yet: go for a known one (boost), shooting on the way, unless this duel is nearly won
     const tHp = target.hp >= 0 && target.maxHp > 0 ? target.hp / target.maxHp : 1
     if (P.laserRush > 0 && !bb.haveLaser && !(tHp < P.laserRushFinish && target.dist < P.laserRushFinishDist) && rushLaser(bb, P.laserRush, sc, false, target)) {
@@ -479,6 +503,7 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     return it
   }
   if (underFire(bb, mv, sc, it)) {
+    sc.fought = true
     weaponReflex(bb, it)
     return it
   }
@@ -536,7 +561,7 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     return it
   }
   // 6. healthy and alone: go and find the next mech (kill tempo) - the freshest known position
-  if (bb.hpFrac >= P.seekHp) {
+  if (bb.hpFrac >= P.seekHp && !sc.passive) {
     let lead: Track | null = null
     const trs = bb.tracker.mechs
     for (let i = 0; i < trs.length; i++) {

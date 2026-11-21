@@ -6635,6 +6635,8 @@ var DEFAULTS = {
   modeGapMs: 0,
   modeGapDeaths: 1,
   modeGapUnknownS: 0,
+  openPassiveS: 0,
+  openEngageDist: 45,
   rangeGun: 14,
   rangeLightning: 14,
   rangeLaser: 0,
@@ -7280,6 +7282,8 @@ class SquadScratch {
   peekT = -1e9;
   peekOk = false;
   js = 0;
+  passive = false;
+  fought = false;
 }
 function travelPace(bb, x, y) {
   if (bb.nEn > 0 || bb.energy < bb.P.boostMinEnergy)
@@ -7561,6 +7565,23 @@ function underFire(bb, mv, sc, it) {
 }
 function decideSquad(bb, mv, sc) {
   const P = bb.P;
+  sc.passive = P.openPassiveS > 0 && bb.t < P.openPassiveS && !bb.squadLocked && bb.mode !== MODE_FFA;
+  sc.fought = false;
+  const it = decideSquadCore(bb, mv, sc);
+  if (sc.passive && !sc.fought && it.weaponsFree && it.targetId >= 0 && it.targetId < 100) {
+    let threat = false;
+    for (let i = 0;i < bb.nEn; i++) {
+      const e = bb.en[i];
+      if (e.id === it.targetId)
+        threat = bb.t - e.tShotAtUs < 3 || e.aimingAtUs && bb.los[e.id] === 1 || e.dist < P.openEngageDist;
+    }
+    if (!threat)
+      it.weaponsFree = false;
+  }
+  return it;
+}
+function decideSquadCore(bb, mv, sc) {
+  const P = bb.P;
   const m = bb.mem;
   const evs = bb.obs.events;
   for (let i = 0;i < evs.length; i++)
@@ -7641,9 +7662,11 @@ function decideSquad(bb, mv, sc) {
       return it;
     }
   }
-  const engD = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist;
+  const engD0 = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist;
+  const engD = sc.passive ? Math.min(engD0, P.openEngageDist) : engD0;
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2);
   if (target && engaged) {
+    sc.fought = true;
     const tHp = target.hp >= 0 && target.maxHp > 0 ? target.hp / target.maxHp : 1;
     if (P.laserRush > 0 && !bb.haveLaser && !(tHp < P.laserRushFinish && target.dist < P.laserRushFinishDist) && rushLaser(bb, P.laserRush, sc, false, target)) {
       rushIntent(bb, sc, it, target);
@@ -7693,6 +7716,7 @@ function decideSquad(bb, mv, sc) {
     return it;
   }
   if (underFire(bb, mv, sc, it)) {
+    sc.fought = true;
     weaponReflex(bb, it);
     return it;
   }
@@ -7741,7 +7765,7 @@ function decideSquad(bb, mv, sc) {
     weaponReflex(bb, it);
     return it;
   }
-  if (bb.hpFrac >= P.seekHp) {
+  if (bb.hpFrac >= P.seekHp && !sc.passive) {
     let lead = null;
     const trs = bb.tracker.mechs;
     for (let i = 0;i < trs.length; i++) {
@@ -9657,5 +9681,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-f-s3.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 3, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5 } });
+// src/entries/final-s0.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 0, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30 } });

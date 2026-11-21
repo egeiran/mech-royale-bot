@@ -37,6 +37,10 @@ export const DEFAULTS = {
   modeGapDeaths: 1,
   /** ... plays the UNKNOWN (FFA ghost) opening until this time (0 = no: squad opening as without the hint) */
   modeGapUnknownS: 0,
+  /** SQUAD opening restraint until this time while the mode is unsettled (no FFA latch, no squad lock; 0 = off):
+   *  no new fight beyond openEngageDist with a mech that is not on us, no seek / walk to sounds, no fire in passing */
+  openPassiveS: 0,
+  openEngageDist: 45,
 
   // ---------------------------------------------------------------- engagement range
   /** preferred duel distance with gun only */
