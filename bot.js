@@ -3909,8 +3909,10 @@ class Executor {
             }
           } else if (charge > 0) {
             st.laserReleases++;
-            wantYaw = cy;
-            wantPitch = cp;
+            if (P.laserLegacyRelease <= 0) {
+              wantYaw = cy;
+              wantPitch = cp;
+            }
           }
         }
       }
@@ -6105,6 +6107,7 @@ var DEFAULTS = {
   lootClearMax: 90,
   duelLtgDist: 0,
   seekHp: 0.6,
+  idleHold: 0,
   seekSoundS: 0,
   reloadFarDist: 999,
   shieldOrbit: 0.3,
@@ -6137,6 +6140,7 @@ var DEFAULTS = {
   laserMaxDist: 230,
   laserKeepGun: 0,
   laserGunHoldS: 0.6,
+  laserLegacyRelease: 0,
   laserShrink: 0.75,
   mortarFire: 0,
   mortarMinDist: 12,
@@ -6166,6 +6170,7 @@ var DEFAULTS = {
   ffaDuelRadius: 30,
   valCube: 10,
   valCrate: 9,
+  crateLaserW: 0,
   valNpc: 13,
   valLightning: 45,
   valLaser: 22,
@@ -6504,7 +6509,7 @@ function bestLoot(bb, silentOnly, maxDist, out) {
     else if (it.type === L_CRATE) {
       if (silentOnly || !bb.gun)
         continue;
-      val = P.valCrate * cubeMult + 0.5 * Math.max(0, pickupValue(bb, W_LIGHTNING)) * 0.33;
+      val = P.valCrate * cubeMult + 0.5 * Math.max(0, pickupValue(bb, W_LIGHTNING)) * 0.33 + P.crateLaserW * 0.5 * Math.max(0, pickupValue(bb, W_LASER)) * 0.33;
       extra = 2;
     } else if (it.type === L_PICKUP)
       val = pickupValue(bb, it.wk);
@@ -6991,6 +6996,12 @@ function decideSquad(bb, mv, sc) {
   if (hurt) {
     it.hold(bb.x, bb.y, bb.z, "heal");
     it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
+    weaponReflex(bb, it);
+    return it;
+  }
+  if (P.idleHold > 0 && bb.zone.marginNext(bb.x, bb.y) > 15) {
+    it.hold(bb.x, bb.y, bb.z, "camp");
+    it.face = FACE_SCAN;
     weaponReflex(bb, it);
     return it;
   }
@@ -8909,5 +8920,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/main.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup });
+// src/entries/pj-style1c.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0 } });

@@ -225,7 +225,7 @@ export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, o
     if (it.type === L_CUBE) val = P.valCube * cubeMult
     else if (it.type === L_CRATE) {
       if (silentOnly || !bb.gun) continue
-      val = P.valCrate * cubeMult + 0.5 * Math.max(0, pickupValue(bb, W_LIGHTNING)) * 0.33
+      val = P.valCrate * cubeMult + 0.5 * Math.max(0, pickupValue(bb, W_LIGHTNING)) * 0.33 + P.crateLaserW * 0.5 * Math.max(0, pickupValue(bb, W_LASER)) * 0.33
       extra = 2
     } else if (it.type === L_PICKUP) val = pickupValue(bb, it.wk)
     if (val <= 0) continue

@@ -212,8 +212,10 @@ export class Executor {
             // releasing: the beam leaves next tick along the aim slewed toward THIS command - command the aim the
             // gate validated (before: the gun lead stayed commanded and the beam missed by the lead angle)
             st.laserReleases++
-            wantYaw = cy
-            wantPitch = cp
+            if (P.laserLegacyRelease <= 0) {
+              wantYaw = cy
+              wantPitch = cp
+            }
           }
         }
       }

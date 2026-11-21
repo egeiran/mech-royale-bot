@@ -58,6 +58,8 @@ export const DEFAULTS = {
   duelLtgDist: 0,
   /** SQUAD: with at least this HP fraction and nobody in sight, go and look for the next mech */
   seekHp: 0.6,
+  /** SQUAD: nothing to loot and nobody in sight -> hold position and scan instead of seeking / exploring (1) */
+  idleHold: 0,
   /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
   seekSoundS: 0,
   /** SQUAD: reload before contact when the target is further than this and the mag is below reloadIdleFrac
@@ -126,6 +128,9 @@ export const DEFAULTS = {
    *  direct laser aim only after laserGunHoldS s at full charge. 0 = laser aim from 0.25 s before full charge */
   laserKeepGun: 0,
   laserGunHoldS: 0.6,
+  /** 1 = the pre-fix release (aim command not set on the release decision: beams left on the gun lead). Only for
+   *  calibration anchors that were scored with that code. */
+  laserLegacyRelease: 0,
   /** laser: target cylinder shrink for the release gate */
   laserShrink: 0.75,
   /** fire a held mortar at mechs (1) or never (0); flat arc onto the feet, only between these distances */
@@ -185,6 +190,8 @@ export const DEFAULTS = {
   valCube: 10,
   /** value of a crate (1 cube + 50 % weapon), before the time cost of killing it */
   valCrate: 9,
+  /** weight of the laser drop chance in a crate's value (0 = only lightning counts, as before) */
+  crateLaserW: 0,
   /** value of an NPC (2 cubes) */
   valNpc: 13,
   /** value of the weapons when the slot is empty */

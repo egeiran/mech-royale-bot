@@ -370,6 +370,13 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     return it
   }
 
+  // 6'. camp: with nothing to loot, stand and scan (hunters walk into our laser range; top bots wait 35-52 %)
+  if (P.idleHold > 0 && bb.zone.marginNext(bb.x, bb.y) > 15) {
+    it.hold(bb.x, bb.y, bb.z, "camp")
+    it.face = FACE_SCAN
+    weaponReflex(bb, it)
+    return it
+  }
   // 6. healthy and alone: go and find the next mech (kill tempo) - the freshest known position
   if (bb.hpFrac >= P.seekHp) {
     let lead: Track | null = null
