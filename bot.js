@@ -8754,5 +8754,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// data/tmp/wt/d1779cc/src/entries/pj-tempo.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { seekSoundS: 8, npcFirstDist: 45, squadRegenUntil: 0.7, lootTimeCost: 0.5, dropFightLeadS: 0 } });
+// data/tmp/wt/d1779cc/src/entries/pj-peek.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { peekMargin: 10 } });
