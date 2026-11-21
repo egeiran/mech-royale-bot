@@ -8387,8 +8387,8 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// data/tmp/wt/5ac412c/src/entries/gate-5.ts
-var T = 5;
+// data/tmp/wt/5ac412c/src/entries/gate-20.ts
+var T = 20;
 var gate = (ctx) => {
   const bot = mainBot(ctx);
   let n = 0;
