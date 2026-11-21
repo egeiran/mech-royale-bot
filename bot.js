@@ -512,5 +512,5 @@ function runProcess(opts) {
   });
 }
 
-// src/entries/simple-near.ts
-runProcess({ name: "ai-caramba", factory: simpleBot, params: { prefDist: 25, gunMaxDist: 140 } });
+// src/entries/simple-far.ts
+runProcess({ name: "ai-caramba", factory: simpleBot, params: { prefDist: 95, gunMaxDist: 200 } });
