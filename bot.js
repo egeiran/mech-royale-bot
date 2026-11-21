@@ -9857,5 +9857,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-P-s61.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 61, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, snipePost: 1 } });
+// src/entries/final-P-s62.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 62, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, snipePost: 1 } });
