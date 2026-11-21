@@ -25,6 +25,8 @@ export interface RunnerOptions {
   /** builds the World from hello.map.dir; may throw (then the primary bot gets no world and we fall back) */
   loadWorld?: (dir: string) => World
   params?: Record<string, number>
+  /** changes the bot's random stream (strafe timing etc.) without changing its logic */
+  salt?: number
   /** observations to replay through the bot before `ready` to warm the JIT (synthetic, from the first hello) */
   warmup?: (bot: Bot, hello: Hello) => void
 }
@@ -56,7 +58,7 @@ export function runProcess(opts: RunnerOptions) {
       hello,
       world: world as World,
       params: opts.params ?? {},
-      rng: makeRng(seed ^ salt),
+      rng: makeRng((seed ^ salt ^ Math.imul((opts.salt ?? 0) | 0, 0x9e3779b1)) >>> 0),
       realtime: true,
       log: (m: string) => log(m),
       rt,

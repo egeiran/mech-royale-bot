@@ -423,7 +423,7 @@ function runProcess(opts) {
       hello,
       world,
       params: opts.params ?? {},
-      rng: makeRng(seed ^ salt),
+      rng: makeRng((seed ^ salt ^ Math.imul((opts.salt ?? 0) | 0, 2654435761)) >>> 0),
       realtime: true,
       log: (m) => log(m),
       rt
@@ -9657,5 +9657,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-style1f.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5 } });
+// src/entries/pj-f-s1.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 1, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5 } });
