@@ -3748,6 +3748,7 @@ class Executor {
   sol = newAimSolution();
   msol = newMortarSolution();
   morReadyT = -1;
+  lasFullT = -1;
   morSkipUntil = -1;
   a2 = { yaw: 0, pitch: 0 };
   slew = { yaw: 0, pitch: 0 };
@@ -3889,7 +3890,12 @@ class Executor {
         const dist = aimAt(bb.x + bb.vx * 0.1, bb.y + bb.vy * 0.1, bb.z, px, py, pz, this.a2, bb.muzzleH, mOut);
         const los = bb.los[tgt.id] === 1 || tgt.npc;
         const useLaser = dist <= Math.min(P.laserMaxDist, las.stats.range ?? 280) && !tgt.npc;
-        const laserAim = charge >= full - 0.25 || !gunOk;
+        if (charge >= full - 0.001) {
+          if (this.lasFullT < 0)
+            this.lasFullT = bb.t;
+        } else
+          this.lasFullT = -1;
+        const laserAim = P.laserKeepGun > 0 ? !gunOk || this.lasFullT >= 0 && bb.t - this.lasFullT >= P.laserGunHoldS : charge >= full - 0.25 || !gunOk;
         if (useLaser || charge > 0) {
           const cy = laserAim ? this.a2.yaw : wantYaw;
           const cp = laserAim ? this.a2.pitch : wantPitch;
@@ -3901,8 +3907,11 @@ class Executor {
               wantYaw = this.a2.yaw;
               wantPitch = this.a2.pitch;
             }
-          } else if (charge > 0)
+          } else if (charge > 0) {
             st.laserReleases++;
+            wantYaw = cy;
+            wantPitch = cp;
+          }
         }
       }
       if (bb.mor && bb.mor.cooldown > 0.2)
@@ -6071,6 +6080,7 @@ class Mover {
 
 // src/bot/brain/params.ts
 var DEFAULTS = {
+  style: 0,
   forceMode: 0,
   unknownSquadAfter: 0,
   quietDeathS: 6,
@@ -6079,6 +6089,7 @@ var DEFAULTS = {
   ffaSoftLatch: 99,
   rangeGun: 14,
   rangeLightning: 14,
+  rangeLaser: 0,
   rangeVsLightning: 14,
   rangeLaserVsMortar: 14,
   rangeVsMortar: 12,
@@ -6090,6 +6101,8 @@ var DEFAULTS = {
   approachBoostEnergy: 35,
   lightningKeepEnergy: 75,
   duelLootDist: 32,
+  lootClearDist: 0,
+  lootClearMax: 90,
   duelLtgDist: 0,
   seekHp: 0.6,
   seekSoundS: 0,
@@ -6122,6 +6135,8 @@ var DEFAULTS = {
   lightningConeFrac: 0.42,
   lightningRangeFrac: 0.97,
   laserMaxDist: 230,
+  laserKeepGun: 0,
+  laserGunHoldS: 0.6,
   laserShrink: 0.75,
   mortarFire: 0,
   mortarMinDist: 12,
@@ -6156,6 +6171,7 @@ var DEFAULTS = {
   valLaser: 22,
   valMortar: 0,
   valSwapToLightning: 28,
+  valSwapToLaser: 0,
   valSwapFromMortar: 20,
   lootTimeCost: 1,
   lootZoneCost: 0.5,
@@ -6252,8 +6268,33 @@ var DEFAULTS = {
   upSensors: 35,
   upMortar: 1
 };
+var STYLE_LASER_KITE = {
+  valLaser: 60,
+  valLightning: 15,
+  valSwapToLightning: 0,
+  valSwapToLaser: 40,
+  rangeLaser: 75,
+  rangeGun: 75,
+  rangeKite: 75,
+  rangeVsLightning: 75,
+  rangeLaserVsMortar: 75,
+  rangeVsMortar: 75,
+  rangeBand: 10,
+  kiteBoostGap: 30,
+  kiteBoostEnergy: 25,
+  peekMargin: 10,
+  squadDisengageRatio: 99,
+  squadDisengageHp: 0.7,
+  squadHealUntil: 0.95,
+  squadFinishHp: 0.3,
+  duelLootDist: 6,
+  laserKeepGun: 1,
+  lootClearDist: 55
+};
 function resolveParams(p) {
   const out = { ...DEFAULTS };
+  if (p && p.style === 1)
+    Object.assign(out, STYLE_LASER_KITE);
   if (p) {
     for (const k in p) {
       const v = p[k];
@@ -6338,6 +6379,8 @@ function duelRange(bb, e) {
   const P = bb.P;
   if (e.npc)
     return 28;
+  if (bb.haveLaser && P.rangeLaser > 0)
+    return P.rangeLaser;
   const eLtg = (e.weapons & W_LIGHTNING) !== 0;
   const eMor = (e.weapons & W_MORTAR) !== 0;
   if (bb.haveLightning && bb.energy > 15 && bb.nThreats <= 1 && bb.nEn <= 1)
@@ -6414,7 +6457,7 @@ function pickupValue(bb, wk) {
   if (wk === W_LIGHTNING)
     return free ? P.valLightning : bb.haveMortar ? P.valLightning : bb.haveLaser ? P.valSwapToLightning : 0;
   if (wk === W_LASER)
-    return free ? P.valLaser : bb.haveMortar ? P.valSwapFromMortar : 0;
+    return free ? P.valLaser : bb.haveMortar ? P.valSwapFromMortar : bb.haveLightning ? P.valSwapToLaser : 0;
   if (wk === W_MORTAR)
     return free ? P.valMortar : 0;
   return 0;
@@ -6426,6 +6469,8 @@ function swapSlot(bb, wk) {
     return bb.morSlot;
   if (wk === W_LIGHTNING && bb.lasSlot >= 0 && (bb.las?.charge ?? 0) <= 0)
     return bb.lasSlot;
+  if (wk === W_LASER && bb.ltgSlot >= 0 && bb.P.valSwapToLaser > 0)
+    return bb.ltgSlot;
   return -1;
 }
 function lootTc(bb) {
@@ -6671,6 +6716,14 @@ function bestWeapon(bb, maxDist, sc) {
   }
   return sc.wpn !== null;
 }
+function lootIsClear(bb, item, clear) {
+  for (let i = 0;i < bb.nEn; i++) {
+    const e = bb.en[i];
+    if (Math.hypot(e.x - item.x, e.y - item.y) < clear)
+      return false;
+  }
+  return true;
+}
 var MECH_SOUND = new Uint8Array(16);
 for (const k of [S_GUN, S_MORTAR, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_CRATE, S_NPC_GUN, S_STEP, S_BOOST, S_JET, S_RELOAD])
   MECH_SOUND[k] = 1;
@@ -6888,6 +6941,14 @@ function decideSquad(bb, mv, sc) {
       it.targetId = target.id;
       it.face = FACE_THREATS;
       it.label = "grab";
+      weaponReflex(bb, it);
+      return it;
+    }
+    if (P.lootClearDist > 0 && bestLoot(bb, true, P.lootClearMax, sc.lc) && sc.lc.item && lootIsClear(bb, sc.lc.item, P.lootClearDist)) {
+      lootIntent(bb, sc.lc, it, PACE_WALK);
+      it.targetId = target.id;
+      it.face = FACE_THREATS;
+      it.label = "grabC";
       weaponReflex(bb, it);
       return it;
     }
@@ -8848,5 +8909,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-laserkite.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { valLaser: 60, valLightning: 15, valSwapToLightning: 0, rangeGun: 75, rangeKite: 75, rangeVsLightning: 75, rangeLaserVsMortar: 75 } });
+// src/entries/pj-style1.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1 } });

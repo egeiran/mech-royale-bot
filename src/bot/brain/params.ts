@@ -3,6 +3,10 @@
  * search them. Units: metres, seconds, radians unless the name says otherwise. Fractions are 0..1.
  */
 export const DEFAULTS = {
+  /** play style preset applied under the explicit params: 0 = default (close-range duelist),
+   *  1 = "laser kite" (STYLE_LASER_KITE below: laser first, fight at 65-85 m backing off, break off at 70 % HP
+   *  to regenerate behind cover, fight from a point only the target sees, no mid-fight looting) */
+  style: 0,
   // ---------------------------------------------------------------- mode
   /** 0 = auto (perception/mode.ts), 1 = force SQUAD, 2 = force FFA */
   forceMode: 0,
@@ -23,6 +27,8 @@ export const DEFAULTS = {
   rangeGun: 14,
   /** preferred duel distance when we hold lightning (inside its 45 m range) */
   rangeLightning: 14,
+  /** preferred duel distance while we hold a laser (0 = use the other range* keys) */
+  rangeLaser: 0,
   /** preferred distance when the enemy holds lightning and we do not (stay outside its arc) */
   rangeVsLightning: 14,
   /** preferred distance with a laser against an enemy that holds a mortar (cook-off) */
@@ -44,6 +50,10 @@ export const DEFAULTS = {
   lightningKeepEnergy: 75,
   /** in a duel, still pick up cubes / wanted weapons lying within this distance (kills drop cubes + 2) */
   duelLootDist: 32,
+  /** in a duel, collect cubes / wanted weapons within lootClearMax m while every visible mech is at least
+   *  lootClearDist m from the item (0 = off) */
+  lootClearDist: 0,
+  lootClearMax: 90,
   /** in a duel, go for a known ground-level lightning pickup within this distance (0 = off) */
   duelLtgDist: 0,
   /** SQUAD: with at least this HP fraction and nobody in sight, go and look for the next mech */
@@ -112,6 +122,10 @@ export const DEFAULTS = {
   lightningRangeFrac: 0.97,
   /** laser: maximum distance at which we bother charging */
   laserMaxDist: 230,
+  /** laser: 1 = keep the gun lead aim (gun keeps firing) while charging and release on it when the beam hits;
+   *  direct laser aim only after laserGunHoldS s at full charge. 0 = laser aim from 0.25 s before full charge */
+  laserKeepGun: 0,
+  laserGunHoldS: 0.6,
   /** laser: target cylinder shrink for the release gate */
   laserShrink: 0.75,
   /** fire a held mortar at mechs (1) or never (0); flat arc onto the feet, only between these distances */
@@ -179,6 +193,8 @@ export const DEFAULTS = {
   valMortar: 0,
   /** value of swapping laser -> lightning / mortar -> anything */
   valSwapToLightning: 28,
+  /** value of swapping lightning -> laser (0 = never) */
+  valSwapToLaser: 0,
   valSwapFromMortar: 20,
   /** utility lost per second of travel */
   lootTimeCost: 1.0,
@@ -353,9 +369,39 @@ export const DEFAULTS = {
 
 export type BrainParams = typeof DEFAULTS
 
-/** DEFAULTS overridden by any finite numeric key present in `p` (unknown keys are ignored). */
+/**
+ * style 1 = "laser kite" (data/intel/teams.md: top bots carry a laser, fight at 60-90 m backing off - house gun
+ * aim falls to 32 % there, house lasers hit 20 % - break off fights at ~70 % HP to regenerate, avoid 2+ lines).
+ * Every value is an ordinary param; explicit params override these.
+ */
+export const STYLE_LASER_KITE: Partial<Record<keyof BrainParams, number>> = {
+  valLaser: 60,
+  valLightning: 15,
+  valSwapToLightning: 0,
+  valSwapToLaser: 40,
+  rangeLaser: 75,
+  rangeGun: 75,
+  rangeKite: 75,
+  rangeVsLightning: 75,
+  rangeLaserVsMortar: 75,
+  rangeVsMortar: 75,
+  rangeBand: 10,
+  kiteBoostGap: 30,
+  kiteBoostEnergy: 25,
+  peekMargin: 10,
+  squadDisengageRatio: 99,
+  squadDisengageHp: 0.7,
+  squadHealUntil: 0.95,
+  squadFinishHp: 0.3,
+  duelLootDist: 6,
+  laserKeepGun: 1,
+  lootClearDist: 55,
+}
+
+/** DEFAULTS, then the style preset (p.style), then any finite numeric key present in `p` (unknown keys ignored). */
 export function resolveParams(p: Record<string, number> | undefined | null): BrainParams {
   const out: BrainParams = { ...DEFAULTS }
+  if (p && p.style === 1) Object.assign(out, STYLE_LASER_KITE)
   if (p) {
     for (const k in p) {
       const v = p[k]

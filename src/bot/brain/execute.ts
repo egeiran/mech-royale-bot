@@ -38,6 +38,7 @@ export class Executor {
   private readonly sol = newAimSolution()
   private readonly msol = newMortarSolution()
   private morReadyT = -1
+  private lasFullT = -1
   private morSkipUntil = -1
   private readonly a2: Aim2 = { yaw: 0, pitch: 0 }
   private readonly slew: Aim2 = { yaw: 0, pitch: 0 }
@@ -187,7 +188,12 @@ export class Executor {
         const dist = aimAt(bb.x + bb.vx * 0.1, bb.y + bb.vy * 0.1, bb.z, px, py, pz, this.a2, bb.muzzleH, mOut)
         const los = bb.los[tgt.id] === 1 || tgt.npc
         const useLaser = dist <= Math.min(P.laserMaxDist, las.stats.range ?? 280) && !tgt.npc
-        const laserAim = charge >= full - 0.25 || !gunOk
+        if (charge >= full - 1e-3) {
+          if (this.lasFullT < 0) this.lasFullT = bb.t
+        } else this.lasFullT = -1
+        // laserKeepGun: keep the gun lead (and the gun firing) through the charge and release on it when the beam
+        // would hit anyway; switch to the direct laser aim only after laserGunHoldS of full charge
+        const laserAim = P.laserKeepGun > 0 ? !gunOk || (this.lasFullT >= 0 && bb.t - this.lasFullT >= P.laserGunHoldS) : charge >= full - 0.25 || !gunOk
         if (useLaser || charge > 0) {
           const cy = laserAim ? this.a2.yaw : wantYaw
           const cp = laserAim ? this.a2.pitch : wantPitch
@@ -202,7 +208,13 @@ export class Executor {
               wantYaw = this.a2.yaw
               wantPitch = this.a2.pitch
             }
-          } else if (charge > 0) st.laserReleases++
+          } else if (charge > 0) {
+            // releasing: the beam leaves next tick along the aim slewed toward THIS command - command the aim the
+            // gate validated (before: the gun lead stayed commanded and the beam missed by the lead angle)
+            st.laserReleases++
+            wantYaw = cy
+            wantPitch = cp
+          }
         }
       }
       // mortar: flat arc onto the target's feet when it is ready and the blast lands clear of us. The gun shares

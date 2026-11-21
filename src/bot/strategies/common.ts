@@ -87,6 +87,7 @@ export function fightRatio(bb: Blackboard, e: Track): number {
 export function duelRange(bb: Blackboard, e: Track): number {
   const P = bb.P
   if (e.npc) return 28
+  if (bb.haveLaser && P.rangeLaser > 0) return P.rangeLaser
   const eLtg = (e.weapons & W_LIGHTNING) !== 0
   const eMor = (e.weapons & W_MORTAR) !== 0
   if (bb.haveLightning && bb.energy > 15 && bb.nThreats <= 1 && bb.nEn <= 1) return P.rangeLightning
@@ -174,7 +175,7 @@ export function pickupValue(bb: Blackboard, wk: number): number {
   if (bb.held & wk) return 0
   const free = bb.freeSlot >= 0
   if (wk === W_LIGHTNING) return free ? P.valLightning : bb.haveMortar ? P.valLightning : bb.haveLaser ? P.valSwapToLightning : 0
-  if (wk === W_LASER) return free ? P.valLaser : bb.haveMortar ? P.valSwapFromMortar : 0
+  if (wk === W_LASER) return free ? P.valLaser : bb.haveMortar ? P.valSwapFromMortar : bb.haveLightning ? P.valSwapToLaser : 0
   if (wk === W_MORTAR) return free ? P.valMortar : 0
   return 0
 }
@@ -184,6 +185,7 @@ export function swapSlot(bb: Blackboard, wk: number): number {
   if (bb.freeSlot >= 0) return -1
   if (bb.morSlot >= 0) return bb.morSlot
   if (wk === W_LIGHTNING && bb.lasSlot >= 0 && (bb.las?.charge ?? 0) <= 0) return bb.lasSlot
+  if (wk === W_LASER && bb.ltgSlot >= 0 && bb.P.valSwapToLaser > 0) return bb.ltgSlot
   return -1
 }
 

@@ -67,6 +67,15 @@ function bestWeapon(bb: Blackboard, maxDist: number, sc: SquadScratch): boolean 
   return sc.wpn !== null
 }
 
+/** every visible mech is at least `clear` m from the item */
+function lootIsClear(bb: Blackboard, item: LootItem, clear: number): boolean {
+  for (let i = 0; i < bb.nEn; i++) {
+    const e = bb.en[i]
+    if (Math.hypot(e.x - item.x, e.y - item.y) < clear) return false
+  }
+  return true
+}
+
 /** sound kinds that mean "an armed mech is (or just was) there" */
 const MECH_SOUND = new Uint8Array(16)
 for (const k of [S_GUN, S_MORTAR, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_CRATE, S_NPC_GUN, S_STEP, S_BOOST, S_JET, S_RELOAD]) MECH_SOUND[k] = 1
@@ -300,6 +309,15 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
       it.targetId = target.id
       it.face = FACE_THREATS
       it.label = "grab"
+      weaponReflex(bb, it)
+      return it
+    }
+    // kill cubes / weapons further away, collected while every visible mech stays clear of them (kite style)
+    if (P.lootClearDist > 0 && bestLoot(bb, true, P.lootClearMax, sc.lc) && sc.lc.item && lootIsClear(bb, sc.lc.item, P.lootClearDist)) {
+      lootIntent(bb, sc.lc, it, PACE_WALK)
+      it.targetId = target.id
+      it.face = FACE_THREATS
+      it.label = "grabC"
       weaponReflex(bb, it)
       return it
     }

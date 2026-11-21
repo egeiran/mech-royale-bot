@@ -165,12 +165,16 @@ function probed(seed: number, tl: boolean): { factory: BotFactory; probe: Probe 
           const las = bb.las
           probe.trace.push(JSON.stringify({
             t: obs.t, hp: Math.round(obs.self.hp), mx: Math.round(obs.self.max_hp), c: obs.self.cubes,
-            w: ws.map((w) => (w ? w.kind[0] : "-")).join(""), l: it.label, tg: it.targetId,
+            w: ws.map((w) => (w ? (w.kind === "lightning" ? "z" : w.kind === "laser" ? "a" : w.kind[0]) : "-")).join(""), l: it.label, tg: it.targetId,
             on, vis, x: Math.round(bb.x), y: Math.round(bb.y), ev,
             dr: obs.drops.map((d) => [Math.round(d.pos[0]), Math.round(d.pos[1]), Math.round(d.lands_in * 10) / 10, d.holder, Math.round(d.progress * 10) / 10]),
             f: a.fire ? (a.fire[0] ? 1 : 0) + (a.fire[1] ? 2 : 0) : 0,
             lc: las ? Math.round((las.charge ?? 0) * 100) / 100 : -1, lcd: las ? Math.round(las.cooldown * 100) / 100 : -1,
             zm: Math.round(bb.zone.margin(bb.x, bb.y)), e: Math.round(obs.self.energy),
+            ...(las && (las.charge ?? 0) > 0 ? (() => {
+              const tr = it.targetId >= 0 ? bb.tracker.get(it.targetId) : null
+              return { ay: obs.self.aim, ca: a.aim, tp: tr ? [tr.x, tr.y, tr.z, tr.vx, tr.vy, tr.vz, tr.radius, tr.height, tr.visible ? 1 : 0] : null, me: [obs.self.pos, obs.self.vel], lfs: a.fire ? a.fire[bb.lasSlot] : false, ls: bb.lasSlot, wf: it.weaponsFree }
+            })() : {}),
           }))
         }
         if (tl && obs.tick % tlEvery === 0) {
