@@ -263,6 +263,23 @@ export function duelIntent(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Inte
   }
 
   const range = duelRange(bb, target)
+  // finish kills: a nearly dead mech running away (or out of sight) is chased with boost, unless others guard it
+  if (P.finishChaseHp > 0 && !target.npc && tHpFrac < P.finishChaseHp) {
+    const d = Math.max(0.1, target.dist)
+    const away = (target.vx * (target.x - bb.x) + target.vy * (target.y - bb.y)) / d
+    if (away > 1 || bb.los[target.id] !== 1) {
+      let crowd = 0
+      for (let i = 0; i < bb.nEn; i++) {
+        const e = bb.en[i]
+        if (e !== target && !e.npc && Math.hypot(e.x - target.x, e.y - target.y) < 60) crowd++
+      }
+      if (crowd < P.finishChaseCrowd && bb.zone.margin(target.x, target.y) > 5) {
+        it.fight(target.id, STYLE_PUSH, Math.min(range, P.finishChaseRange), "finish")
+        it.chase = true
+        return
+      }
+    }
+  }
   // several mechs around: fight from the nearby point where only the target has a line on us
   if (P.peekMargin > 0 && !target.npc && bb.nEn > 1) {
     if (bb.t - sc.peekT > P.peekEvery) {
@@ -450,6 +467,8 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
       return it
     }
     duelIntent(bb, mv, sc, it, target, true)
+    // no laser: do not empty the magazine at long range on a healthy mech (22 % hits beyond 120 m)
+    if (P.gunFarDist > 0 && !bb.haveLaser && target.dist > P.gunFarDist && (target.hp < 0 || target.hp > P.gunFarHp * target.maxHp)) it.weaponsFree = false
     // a mech that has not noticed us: close in silently, open fire only from ambushDist (full magazine, it
     // is not facing us yet, no return fire at long range)
     if (P.ambushDist > 0 && it.label === "duel" && target.dist > P.ambushDist && bb.t - target.tShotAtUs > 4 && bb.t - target.tAimedAtUs > 1.5 && bb.t - target.tHitByUs > 4 && bb.t - bb.tHurt > 3) {

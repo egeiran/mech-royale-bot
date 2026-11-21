@@ -450,6 +450,13 @@ export class Executor {
       }
       this.gotoMove(e.x, e.y, e.z, false, Math.min(R, 10))
       if (!e.npc && d > P.approachBoostDist && bb.grounded && !this.mv.noBoost && bb.energy > (bb.haveLightning ? P.lightningKeepEnergy : P.approachBoostEnergy)) this.boost = true
+      if (it.chase && bb.grounded && !this.mv.noBoost && bb.energy > 15) this.boost = true
+      return
+    }
+    if (it.chase && d > R + 3) {
+      // finish a fleeing target: straight after it along the path, boosting
+      this.gotoMove(e.x, e.y, e.z, false, R)
+      if (bb.grounded && !this.mv.noBoost && bb.energy > 15 && (this.mx !== 0 || this.my !== 0)) this.boost = true
       return
     }
     if (!hold && d > R + 18) {

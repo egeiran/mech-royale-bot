@@ -91,6 +91,7 @@ export function duelRange(bb: Blackboard, e: Track): number {
   const eLtg = (e.weapons & W_LIGHTNING) !== 0
   const eMor = (e.weapons & W_MORTAR) !== 0
   if (bb.haveLightning && bb.energy > 15 && bb.nThreats <= 1 && bb.nEn <= 1) return P.rangeLightning
+  if (P.rangeGunOnly > 0 && !bb.haveLaser && !bb.haveLightning) return P.rangeGunOnly
   if (eLtg) return P.rangeVsLightning
   if (eMor) return bb.haveLaser ? P.rangeLaserVsMortar : P.rangeVsMortar
   return P.rangeGun

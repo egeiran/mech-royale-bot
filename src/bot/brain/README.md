@@ -62,6 +62,20 @@ sim and the real ghostKills 4 probe), `ambushDist` (bad), `targetDpsW`, `engageH
 `squadHealUntil`/`squadLootTimeCost` (squad-mode-only overrides), `idleHold`, `crateLaserW`, `boostTravelDist`
 (now wired). `eval.ts --trace <dir>` writes per-decision JSONL for data/tmp/squad/trace_an.py.
 
+## Laser / nav / finish params (laser agent, 2026-11-21 night; all off unless noted)
+Harness on REAL layouts (live replay headers via `src/sim/loot.ts layoutHook`): `bun data/tmp/laser/harness.ts
+--opp none|squad --seats 3 --files 70 --T 60 --params k=v`. Real layouts = sim generator statistically (lasers/match
+12.8 vs 13.6, spawn->laser p50 108/107 m, spawns seeing a laser 39 %/39 %).
+- `jetScan` m (opening: jet straight up while spinning; +25 m: spawns seeing a laser 39 -> 64 %), `laserRush` m (go
+  for a known laser with boost, also out of a duel; `laserRushFinish/Crowd/Energy`), `ltgVetoLaser` m (no lightning
+  while a laser is known). Squad hunters, real layouts: laser by 30/60 s 52/62 % -> 61/75 %.
+- `navBodyFromCubes` (default ON): the real server reports unscaled self.stats.radius/height; plan with the grown
+  body (6-cube loop under the 11.5 m bridge at (-108,-33)). `navWatchdogS` s: no progress near one spot -> replan
+  1.15x bigger, on foot for 12 s; 2nd trip blacklists the goal (`bb.addBadGoal`, wantDrop skips it); repeated
+  hop-outs do not jet. Test: navloop.test.ts.
+- `finishChaseHp` (+`finishChaseRange/Crowd`: boost after a fleeing nearly dead mech), `rangeGunOnly` (gun-only duel
+  range vs every mech), `gunFarDist`/`gunFarHp` (no gun at healthy mechs beyond it without a laser).
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,

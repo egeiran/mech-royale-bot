@@ -47,6 +47,8 @@ export class Intent {
   allowJet = true
   /** jet straight up (jump when grounded, jets in the air), no horizontal move: the opening jet scan */
   jetUp = false
+  /** fight: pursue the target with boost (finish a fleeing, nearly dead target) */
+  chase = false
   /** mech / NPC to shoot (track id), -1 = none */
   targetId = -1
   /** fight movement */
@@ -74,6 +76,7 @@ export class Intent {
     this.arrive = 2
     this.allowJet = true
     this.jetUp = false
+    this.chase = false
     this.targetId = -1
     this.style = STYLE_PUSH
     this.range = 25

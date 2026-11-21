@@ -2529,6 +2529,7 @@ class Intent {
   arrive = 2;
   allowJet = true;
   jetUp = false;
+  chase = false;
   targetId = -1;
   style = STYLE_PUSH;
   range = 25;
@@ -2547,6 +2548,7 @@ class Intent {
     this.arrive = 2;
     this.allowJet = true;
     this.jetUp = false;
+    this.chase = false;
     this.targetId = -1;
     this.style = STYLE_PUSH;
     this.range = 25;
@@ -4181,6 +4183,14 @@ class Executor {
       }
       this.gotoMove(e.x, e.y, e.z, false, Math.min(R, 10));
       if (!e.npc && d > P.approachBoostDist && bb.grounded && !this.mv.noBoost && bb.energy > (bb.haveLightning ? P.lightningKeepEnergy : P.approachBoostEnergy))
+        this.boost = true;
+      if (it.chase && bb.grounded && !this.mv.noBoost && bb.energy > 15)
+        this.boost = true;
+      return;
+    }
+    if (it.chase && d > R + 3) {
+      this.gotoMove(e.x, e.y, e.z, false, R);
+      if (bb.grounded && !this.mv.noBoost && bb.energy > 15 && (this.mx !== 0 || this.my !== 0))
         this.boost = true;
       return;
     }
@@ -6258,6 +6268,12 @@ var DEFAULTS = {
   laserRushFinishDist: 110,
   laserRushCrowd: 2,
   ltgVetoLaser: 0,
+  finishChaseHp: 0,
+  finishChaseRange: 25,
+  finishChaseCrowd: 2,
+  rangeGunOnly: 0,
+  gunFarDist: 0,
+  gunFarHp: 0.25,
   rangeKite: 14,
   rangeBand: 5,
   strafeSpeed: 1,
@@ -6527,6 +6543,8 @@ function duelRange(bb, e) {
   const eMor = (e.weapons & W_MORTAR) !== 0;
   if (bb.haveLightning && bb.energy > 15 && bb.nThreats <= 1 && bb.nEn <= 1)
     return P.rangeLightning;
+  if (P.rangeGunOnly > 0 && !bb.haveLaser && !bb.haveLightning)
+    return P.rangeGunOnly;
   if (eLtg)
     return P.rangeVsLightning;
   if (eMor)
@@ -7055,6 +7073,23 @@ function duelIntent(bb, mv, sc, it, target, allowDisengage) {
     }
   }
   const range = duelRange(bb, target);
+  if (P.finishChaseHp > 0 && !target.npc && tHpFrac < P.finishChaseHp) {
+    const d = Math.max(0.1, target.dist);
+    const away = (target.vx * (target.x - bb.x) + target.vy * (target.y - bb.y)) / d;
+    if (away > 1 || bb.los[target.id] !== 1) {
+      let crowd = 0;
+      for (let i = 0;i < bb.nEn; i++) {
+        const e = bb.en[i];
+        if (e !== target && !e.npc && Math.hypot(e.x - target.x, e.y - target.y) < 60)
+          crowd++;
+      }
+      if (crowd < P.finishChaseCrowd && bb.zone.margin(target.x, target.y) > 5) {
+        it.fight(target.id, STYLE_PUSH, Math.min(range, P.finishChaseRange), "finish");
+        it.chase = true;
+        return;
+      }
+    }
+  }
   if (P.peekMargin > 0 && !target.npc && bb.nEn > 1) {
     if (bb.t - sc.peekT > P.peekEvery) {
       sc.peekT = bb.t;
@@ -7228,6 +7263,8 @@ function decideSquad(bb, mv, sc) {
       return it;
     }
     duelIntent(bb, mv, sc, it, target, true);
+    if (P.gunFarDist > 0 && !bb.haveLaser && target.dist > P.gunFarDist && (target.hp < 0 || target.hp > P.gunFarHp * target.maxHp))
+      it.weaponsFree = false;
     if (P.ambushDist > 0 && it.label === "duel" && target.dist > P.ambushDist && bb.t - target.tShotAtUs > 4 && bb.t - target.tAimedAtUs > 1.5 && bb.t - target.tHitByUs > 4 && bb.t - bb.tHurt > 3) {
       it.weaponsFree = false;
       it.label = "stalk";
@@ -9199,5 +9236,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-style1f.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5 } });
+// src/entries/pj-style1h.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, finishChaseHp: 0.2, gunFarDist: 120, rangeGunOnly: 55 } });

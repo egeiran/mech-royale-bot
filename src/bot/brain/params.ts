@@ -128,6 +128,18 @@ export const DEFAULTS = {
   laserRushCrowd: 2,
   /** no lightning pickups while we hold no laser and a laser is known within this distance (0 = off) */
   ltgVetoLaser: 0,
+  /** finish kills: a mech target below this HP fraction that runs away (or broke the line) is chased with boost
+   *  to finishChaseRange, unless finishChaseCrowd other mechs are within 60 m of it (0 = off) */
+  finishChaseHp: 0,
+  finishChaseRange: 25,
+  finishChaseCrowd: 2,
+  /** gun only (no laser, no lightning): preferred duel distance against every mech, whatever it carries (0 = off;
+   *  the range* keys apply). Real: <25 m 145/195 dealt/taken HP/s, 25-45 m 83/79, 45-65 m 88/64, 65-85 m 33/20 */
+  rangeGunOnly: 0,
+  /** without a laser: no gun fire at mechs beyond this distance unless the target is below gunFarHp (0 = off;
+   *  real gun hit rate >= 120 m 22 %, and the magazine is then empty when the target comes close) */
+  gunFarDist: 0,
+  gunFarHp: 0.25,
   /** kite style: preferred distance */
   rangeKite: 14,
   /** width of the dead band around the preferred range in which we only strafe */
