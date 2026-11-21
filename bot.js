@@ -8909,5 +8909,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-style1.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1 } });
+// src/entries/main.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup });
