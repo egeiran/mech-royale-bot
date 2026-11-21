@@ -521,5 +521,5 @@ function runProcess(opts) {
   });
 }
 
-// src/entries/p7-noretreat.ts
-runProcess({ name: "ai-caramba", factory: simpleBot, params: { prefDist: 25, retreatHp: 0 } });
+// src/entries/p8-nofarm.ts
+runProcess({ name: "ai-caramba", factory: simpleBot, params: { prefDist: 25, farm: 0 } });
