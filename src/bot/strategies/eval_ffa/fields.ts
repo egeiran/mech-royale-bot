@@ -12,6 +12,9 @@ import { FINALIST_PRESETS, FINALIST_WEIGHTS, makeFinalist, standStillBot } from 
 export interface Seat {
   bot: string
   params?: Params
+  /** harness only (eval_ffa/run.ts, candidate seat): fake runner timing, ms between our answer and the next
+   *  observation (ctx.rt.gaps), to test the modeGapMs hint; "rtGapMs=100" in a --cand spec */
+  rtGapMs?: number
 }
 
 const RUNNERS = ["tigertown", "n2696", "abot", "scorpion", "benchmaster", "azing", "cocoa", "poteto"]
@@ -34,7 +37,7 @@ function weightedDistinct(rng: ReturnType<typeof makeRng>, weights: Record<strin
   return out
 }
 
-export const FIELD_NAMES = ["finalists", "duelists", "house", "mixed", "hunters"] as const
+export const FIELD_NAMES = ["finalists", "duelists", "house", "mixed", "hunters", "lobby"] as const
 
 /**
  *   finalists  15 distinct team imitations drawn by their number of appearances in the recorded showdowns
@@ -43,6 +46,8 @@ export const FIELD_NAMES = ["finalists", "duelists", "house", "mixed", "hunters"
  *   house      10 expert house bots (the final fills empty seats with them) + 5 finalists
  *   mixed      5 finalists, 4 house (expert, hard, brawler, sniper), 3 squad duelists, 3 hunters
  *   hunters    stress test, not a measured field: 9 hunters + 6 finalists (everybody comes looking)
+ *   lobby      calibration only: the public "Play now" lobby of data/intel/play.md (15 house bots: expert, two
+ *              astra probes, two red probes) as 3 expert + 6 astra + 6 hard; standard zone (the lobby ran it at 2x)
  */
 export function fieldLineup(field: string, seed: number): Seat[] {
   const rng = makeRng(((seed * 2654435761) ^ 0x0ffa17) >>> 0)
@@ -54,6 +59,7 @@ export function fieldLineup(field: string, seed: number): Seat[] {
   else if (field === "house") seats = [...Array.from({ length: 10 }, () => ({ bot: "house:expert" })), ...fin(5)]
   else if (field === "mixed") seats = [...fin(5), { bot: "house:expert" }, { bot: "house:hard" }, { bot: "house:brawler" }, { bot: "house:sniper" }, DUEL, DUEL, DUEL, ...pick(["hunter"], 3)]
   else if (field === "hunters") seats = [...pick(["hunter"], 9), ...fin(6)]
+  else if (field === "lobby") seats = [...Array.from({ length: 3 }, () => ({ bot: "house:expert" })), ...Array.from({ length: 6 }, () => ({ bot: "house:astra" })), ...Array.from({ length: 6 }, () => ({ bot: "house:hard" }))]
   else throw new Error(`unknown field "${field}" (have: ${FIELD_NAMES.join(", ")})`)
   for (let i = seats.length - 1; i > 0; i--) {
     const j = rng.int(i + 1)

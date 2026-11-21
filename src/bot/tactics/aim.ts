@@ -549,3 +549,462 @@ export function lightningTarget(obs: Observation, yaw: number, range = 45, coneD
   }
   return best
 }
+
+// ---------------------------------------------------------------- gun aim v1 (measured in src/tools/aimlab)
+/*
+ * What the offline aim lab measured on our 8 real play matches (and two god-view replays of them):
+ *  - shots leave along the actual aim + Gaussian spread 0.62 deg per axis; hitbox radius 2.5*scale + 0.3 (bullet
+ *    radius) tested against the target where it stands AFTER its move that tick
+ *  - house bots dodge bullets they can see: as if their radius shrank by ~1.75 m/s after 0.1 s of flight
+ *  - best target predictor: constant velocity plus 0.65 x the latest acceleration for at most 0.25 s, speed capped
+ *    at the target's recent top speed (lateral RMS at 0.3 s 0.98 m vs 1.09 m for constant velocity; smoothed-velocity
+ *    or "oscillation centre" aiming is much worse, 1.7 m); ballistic z for airborne targets (vertical RMS -25 %)
+ *  - the public play server applies every action 2 decisions late (aim and fire, all 8 matches); the lockstep scorer
+ *    0 (protocol): the lead and the fire gate use the fire time INCLUDING that latency, estimated online (GunAimer.lag)
+ */
+export interface AimV1Opts {
+  /** fraction of the latest observed acceleration extrapolated, and for how long (s) */
+  accelFrac: number
+  accelHorizon: number
+  /** floor of the speed cap for the acceleration extrapolation (m/s) */
+  vmaxFloor: number
+  /** ballistic z for airborne targets (1 = on). Jetting (constant vz) instead when the observed vertical
+   *  acceleration is above -gravity/2, or - acceleration unknown - when it rises at jetVz..10.5 m/s (jet cap 10;
+   *  a fresh jump starts at 11) */
+  ballistic: number
+  gravity: number
+  jetVz: number
+  /** aim point height as a fraction of the target height above its feet */
+  aimHeight: number
+  /** prediction error model: lateral sigma (m) = predC * tau^predExp, tau = s from the obs to the impact */
+  predC: number
+  predExp: number
+  /** dodge model: effective radius shrinks by dodgeK * (flight - dodgeT0) m (capped at dodgeMax) */
+  dodgeK: number
+  dodgeT0: number
+  dodgeMax: number
+  /** bullet radius padding the hitbox */
+  pad: number
+}
+export const AIM_V1: AimV1Opts = {
+  accelFrac: 0.65, accelHorizon: 0.25, vmaxFloor: 6, ballistic: 1, gravity: 22, jetVz: 7.5, aimHeight: 0.5,
+  predC: 6.3, predExp: 1.55, dodgeK: 1.75, dodgeT0: 0.1, dodgeMax: 2, pad: 0.3,
+}
+
+/** what the shooter knows about its target (feet position, m and m/s) */
+export interface TargetKin {
+  x: number
+  y: number
+  z: number
+  vx: number
+  vy: number
+  vz: number
+  /** horizontal acceleration from the last two observations (0 when unknown) */
+  ax: number
+  ay: number
+  /** vertical acceleration from the last two observations (NaN = unknown) */
+  az: number
+  /** recent top horizontal speed (decays over ~2 s) */
+  vmax: number
+  airborne: boolean
+  /** the floor under the target (terrain or roof: World.floorZ) for the ballistic fall */
+  groundZ: number
+  radius: number
+  height: number
+}
+export function newTargetKin(): TargetKin {
+  return { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ax: 0, ay: 0, az: NaN, vmax: 0, airborne: false, groundZ: -1e9, radius: 2.5, height: 9 }
+}
+
+export interface Vec3 {
+  x: number
+  y: number
+  z: number
+}
+
+/** predicted feet position t s after the observation (constant velocity + capped acceleration + ballistic z) */
+export function predictKin(k: TargetKin, t: number, o: AimV1Opts, out: Vec3): void {
+  let x = k.x, y = k.y, vx = k.vx, vy = k.vy
+  let ta = t < o.accelHorizon ? t : o.accelHorizon
+  const ax = k.ax * o.accelFrac, ay = k.ay * o.accelFrac
+  if (ta > 0 && (ax !== 0 || ay !== 0)) {
+    const cap = k.vmax > o.vmaxFloor ? k.vmax : o.vmaxFloor
+    const cap2 = cap * cap
+    const n = Math.ceil(ta / 0.025)
+    const dt = ta / n
+    let accel = true
+    for (let i = 0; i < n; i++) {
+      if (accel) {
+        const nvx = vx + ax * dt, nvy = vy + ay * dt
+        const s2 = nvx * nvx + nvy * nvy
+        if (s2 > cap2 && s2 > vx * vx + vy * vy) {
+          const f = cap / Math.sqrt(s2)
+          vx = nvx * f
+          vy = nvy * f
+          accel = false
+        } else {
+          vx = nvx
+          vy = nvy
+        }
+      }
+      x += vx * dt
+      y += vy * dt
+    }
+  } else ta = 0
+  out.x = x + vx * (t - ta)
+  out.y = y + vy * (t - ta)
+  const jet = k.az === k.az ? k.az > -0.5 * o.gravity : k.vz >= o.jetVz && k.vz <= 10.5
+  if (o.ballistic > 0 && k.airborne && !jet) {
+    const z = k.z + k.vz * t - 0.5 * o.gravity * t * t
+    out.z = z > k.groundZ ? z : k.groundZ > k.z ? k.z : k.groundZ
+  } else out.z = k.z + k.vz * t
+}
+
+const _pk: Vec3 = { x: 0, y: 0, z: 0 }
+
+/**
+ * Intercept solution for a target moving as predictKin says. (s*) = shooter feet and velocity at the observation;
+ * t0 = s from the observation until our command takes effect (2 * lag ticks); aim/cooldown = the torso aim and the
+ * gun cooldown at that moment. The shot leaves t0 + k ticks after the observation, k = max(1, cooldown, slew);
+ * out.tFire / out.tHit are measured from the observation. aimZ = aim point height above the target's feet.
+ */
+export function leadGunV1(
+  sx: number, sy: number, sz: number, svx: number, svy: number, svz: number,
+  aimYaw: number, aimPitch: number, k: TargetKin, aimZ: number,
+  projSpeed: number, range: number, cooldown: number, t0: number,
+  out: AimSolution, o: AimV1Opts,
+  muzzleHeight = 7, muzzleOut = 3, turnRate = 4, pitchRate = 3, minPitch = -0.7, maxPitch = 1.3,
+): boolean {
+  let kt = Math.ceil(cooldown / TICK - 1e-6)
+  if (kt < 1) kt = 1
+  let yaw = 0, pitch = 0, s = 0, tL = 0, ix = k.x, iy = k.y, iz = k.z + aimZ
+  {
+    const dx = k.x - sx, dy = k.y - sy, dz = k.z + aimZ - (sz + muzzleHeight)
+    s = Math.sqrt(dx * dx + dy * dy + dz * dz) / projSpeed
+  }
+  for (let outer = 0; outer < 5; outer++) {
+    const tFire = t0 + kt * TICK
+    tL = tFire - TICK
+    const bx = sx + svx * tFire, by = sy + svy * tFire, bz = sz + svz * tFire + muzzleHeight
+    let h = 0, dz = 0, hx = 0, hy = 0
+    for (let i = 0; i < 3; i++) {
+      predictKin(k, tL + s, o, _pk)
+      ix = _pk.x
+      iy = _pk.y
+      iz = _pk.z + aimZ
+      hx = ix - bx
+      hy = iy - by
+      h = Math.sqrt(hx * hx + hy * hy) - muzzleOut
+      if (h < 0.01) h = 0.01
+      dz = iz - bz
+      s = Math.sqrt(h * h + dz * dz) / projSpeed
+    }
+    yaw = Math.atan2(hy, hx)
+    pitch = Math.atan2(dz, h)
+    const ks = Math.ceil(slewTime(aimYaw, aimPitch, yaw, clamp(pitch, minPitch, maxPitch), turnRate, pitchRate) / TICK - 1e-6)
+    if (ks <= kt) break
+    kt = ks
+  }
+  out.yaw = yaw
+  out.pitch = pitch
+  out.tof = s
+  out.tFire = t0 + kt * TICK
+  out.tHit = tL + s
+  out.dist = s * projSpeed
+  out.ix = ix
+  out.iy = iy
+  out.iz = iz
+  out.inRange = out.dist <= range && pitch >= minPitch && pitch <= maxPitch
+  return out.inRange
+}
+
+/**
+ * Estimated hit probability of a shot along (shotYaw, shotPitch) for the solution `sol` (the ideal direction to
+ * the predicted aim point aimZ above the feet): lateral/vertical miss of the actual aim, Gaussian spread, prediction
+ * error predC * tHit^predExp, dodge shrink of the radius with the flight time.
+ */
+export function hitProbV1(sol: AimSolution, shotYaw: number, shotPitch: number, k: TargetKin, aimZ: number, spreadDeg: number, o: AimV1Opts): number {
+  const d = sol.dist > 1 ? sol.dist : 1
+  const ey = wrapPi(sol.yaw - shotYaw) * Math.cos(sol.pitch) * d
+  const ev = (sol.pitch - shotPitch) * d + (aimZ - 0.5 * k.height)
+  const ss = d * spreadDeg * DEG
+  const tau = sol.tHit > 0 ? sol.tHit : 0
+  const sp = o.predC * Math.pow(tau, o.predExp)
+  const sl = Math.sqrt(ss * ss + sp * sp)
+  const fl = sol.tof - o.dodgeT0
+  let R = k.radius + o.pad - (fl > 0 ? Math.min(o.dodgeMax, o.dodgeK * fl) : 0)
+  if (R < 0.3) R = 0.3
+  const pl = 0.5 * (erf((R - ey) / (1.4142135623730951 * sl)) + erf((R + ey) / (1.4142135623730951 * sl)))
+  const spz = k.airborne ? 0.5 * sp : 0.15 * sp
+  const sv = Math.sqrt(ss * ss + spz * spz)
+  const hh = 0.5 * k.height + o.pad
+  const pv = 0.5 * (erf((hh - ev) / (1.4142135623730951 * sv)) + erf((hh + ev) / (1.4142135623730951 * sv)))
+  return pl * pv
+}
+
+/** caller-owned per-decision inputs of GunAimer.solve */
+export interface GunIn {
+  cooldown: number
+  ammo: number
+  reload: number
+  /** weapon stats */
+  rate: number
+  mag: number
+  reloadS: number
+  speed: number
+  range: number
+  spreadDeg: number
+}
+export interface ShooterIn {
+  x: number
+  y: number
+  z: number
+  vx: number
+  vy: number
+  vz: number
+  aimYaw: number
+  aimPitch: number
+  muzzleH: number
+  muzzleOut: number
+  turnRate: number
+  pitchRate: number
+  minPitch: number
+  maxPitch: number
+}
+export function newGunIn(): GunIn {
+  return { cooldown: 0, ammo: 12, reload: 0, rate: 0.24, mag: 12, reloadS: 2.4, speed: 252, range: 230, spreadDeg: 0.6 }
+}
+export function newShooterIn(): ShooterIn {
+  return { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, aimYaw: 0, aimPitch: 0, muzzleH: 7, muzzleOut: 3, turnRate: 4, pitchRate: 3, minPitch: -0.7, maxPitch: 1.3 }
+}
+
+const NCMD = 8
+const MAX_LAG = 3
+
+/**
+ * Gun aiming v1 with its state (one per bot): online action-latency estimate, per-target acceleration memory,
+ * latency-aware lead and a hit-probability fire gate. Per decision: observe() -> updateTarget() -> solve() ->
+ * (whatever the caller commands) -> commit(final aim, gun trigger). commit() must run on EVERY decision.
+ */
+export class GunAimer {
+  /** estimated extra action latency in decisions (0 = lockstep scorer, 2 = public play server) */
+  lag = 0
+  readonly kin = newTargetKin()
+  readonly sol = newAimSolution()
+  /** hit probability of the last solve() and the aim point height used */
+  p = 0
+  aimZ = 4.5
+  /** seconds from the observation until our command takes effect, of the last solve() */
+  t0 = 0
+  readonly votes = new Float64Array(MAX_LAG + 1)
+  private readonly o: AimV1Opts
+  private readonly cy = new Float64Array(NCMD)
+  private readonly cp = new Float64Array(NCMD)
+  private readonly cf = new Uint8Array(NCMD)
+  private nCmd = 0
+  private prevT = -1
+  private prevYaw = 0
+  private prevPitch = 0
+  private readonly lvx = new Float64Array(16)
+  private readonly lvy = new Float64Array(16)
+  private readonly lvz = new Float64Array(16)
+  private readonly lt = new Float64Array(16).fill(-1)
+  private readonly vmx = new Float64Array(16)
+  private readonly a2: Aim2 = { yaw: 0, pitch: 0 }
+
+  constructor(opts: AimV1Opts = AIM_V1, fixedLag = -1) {
+    this.o = opts
+    if (fixedLag >= 0) {
+      this.lag = fixedLag
+      this.fixed = true
+    }
+  }
+  private fixed = false
+
+  /** start of a decision: our actual aim now (feeds the latency estimate) */
+  observe(t: number, aimYaw: number, aimPitch: number, turnRate: number, pitchRate: number, minPitch = -0.7, maxPitch = 1.3): void {
+    const dt = t - this.prevT
+    if (!this.fixed && this.prevT >= 0 && dt > 0.05 && dt < 0.15 && this.nCmd > MAX_LAG) {
+      // which command, sent L decisions before the last one, moved the torso from the previous aim to this one
+      let best = -1, bestE = Infinity, second = Infinity
+      for (let L = 0; L <= MAX_LAG; L++) {
+        const r = (this.nCmd - 1 - L) % NCMD
+        slewStep(this.prevYaw, this.prevPitch, this.cy[r], this.cp[r], turnRate, pitchRate, 2 * TICK, this.a2, minPitch, maxPitch)
+        const e = Math.abs(wrapPi(aimYaw - this.a2.yaw)) + Math.abs(aimPitch - this.a2.pitch)
+        if (e < bestE) {
+          second = bestE
+          bestE = e
+          best = L
+        } else if (e < second) second = e
+      }
+      if (best >= 0 && bestE < 0.002 && second > 0.01) {
+        for (let L = 0; L <= MAX_LAG; L++) this.votes[L] *= 0.98
+        this.votes[best] += 1
+        let arg = 0
+        for (let L = 1; L <= MAX_LAG; L++) if (this.votes[L] > this.votes[arg]) arg = L
+        if (arg !== this.lag && this.votes[arg] >= 4 && this.votes[arg] > 2 * this.votes[this.lag]) this.lag = arg
+      }
+    }
+    this.prevT = t
+    this.prevYaw = aimYaw
+    this.prevPitch = aimPitch
+  }
+
+  /** the target's state this decision (mech ids 0..15 keep an acceleration memory); fills and returns this.kin */
+  updateTarget(id: number, t: number, x: number, y: number, z: number, vx: number, vy: number, vz: number, radius: number, height: number, groundZ: number): TargetKin {
+    const k = this.kin
+    k.x = x
+    k.y = y
+    k.z = z
+    k.vx = vx
+    k.vy = vy
+    k.vz = vz
+    k.radius = radius
+    k.height = height
+    k.groundZ = groundZ
+    k.airborne = Math.abs(vz) > 0.3 || z - groundZ > 0.8
+    k.ax = 0
+    k.ay = 0
+    k.az = NaN
+    const sp = Math.sqrt(vx * vx + vy * vy)
+    if (id >= 0 && id < 16) {
+      const dt = t - this.lt[id]
+      if (this.lt[id] >= 0 && dt > 0.05 && dt < 0.15) {
+        k.ax = (vx - this.lvx[id]) / dt
+        k.ay = (vy - this.lvy[id]) / dt
+        k.az = (vz - this.lvz[id]) / dt
+      }
+      const decay = this.lt[id] >= 0 && dt > 0 && dt < 2 ? Math.exp(-dt / 2) : 0
+      this.vmx[id] = Math.max(sp, this.vmx[id] * decay)
+      k.vmax = this.vmx[id]
+      this.lvx[id] = vx
+      this.lvy[id] = vy
+      this.lvz[id] = vz
+      this.lt[id] = t
+    } else k.vmax = sp
+    return k
+  }
+
+  /**
+   * Lead the current target (this.kin) and decide the trigger: true when the shot would leave within our command's
+   * two ticks and its estimated hit probability is >= pStar (and it is within maxDist). this.sol holds the aim.
+   */
+  solve(s: ShooterIn, g: GunIn, pStar: number, maxDist: number): boolean {
+    const o = this.o
+    const lag = this.lag
+    // run the commands already on their way through the torso and gun models
+    let cd = g.cooldown, am = g.ammo, rl = g.reload
+    let ay = s.aimYaw, ap = s.aimPitch
+    for (let L = lag; L >= 1; L--) {
+      if (this.nCmd - L < 0) continue
+      const r = (this.nCmd - L) % NCMD
+      for (let j = 0; j < 2; j++) {
+        slewStep(ay, ap, this.cy[r], this.cp[r], s.turnRate, s.pitchRate, TICK, this.a2, s.minPitch, s.maxPitch)
+        ay = this.a2.yaw
+        ap = this.a2.pitch
+        if (rl > 0) {
+          rl -= TICK
+          if (rl <= 1e-9) {
+            rl = 0
+            am = g.mag
+          }
+        }
+        cd -= TICK
+        if (this.cf[r] && rl <= 0 && am > 0 && cd <= 1e-9) {
+          cd += g.rate
+          am--
+        } else if (cd < 0) cd = 0
+      }
+    }
+    if (cd < 0) cd = 0
+    const t0 = 2 * lag * TICK
+    this.t0 = t0
+    const k = this.kin
+    const aimZ = (k.airborne ? 0.5 : o.aimHeight) * k.height
+    this.aimZ = aimZ
+    const sol = this.sol
+    // with a reload or a long cooldown ahead, keep tracking the target (lead for ~0.3 s, not for when the gun is back)
+    const wait = rl > cd ? rl : cd
+    leadGunV1(s.x, s.y, s.z, s.vx, s.vy, s.vz, ay, ap, k, aimZ, g.speed, g.range, wait < 0.3 ? wait : 0.3, t0, sol, o, s.muzzleH, s.muzzleOut, s.turnRate, s.pitchRate, s.minPitch, s.maxPitch)
+    this.p = 0
+    if (rl > 0 || am <= 0 || !sol.inRange || sol.dist > maxDist) return false
+    if (sol.tFire - t0 > DECISION_DT + 1e-6) return false
+    slewStep(ay, ap, sol.yaw, sol.pitch, s.turnRate, s.pitchRate, sol.tFire - t0, this.a2, s.minPitch, s.maxPitch)
+    this.p = hitProbV1(sol, this.a2.yaw, this.a2.pitch, k, aimZ, g.spreadDeg, o)
+    return this.p >= pStar
+  }
+
+  /** predicted target centre on the laser release tick (laserAim) and the beam laserGate validated (muzzle -> exit) */
+  readonly lp: Vec3 = { x: 0, y: 0, z: 0 }
+  bx = 0
+  by = 0
+  bz = 0
+  ex = 0
+  ey = 0
+  ez = 0
+  private readonly lpf: Vec3 = { x: 0, y: 0, z: 0 }
+
+  /** our torso aim when our command starts to act: the pending commands slewed through (written to this.a2) */
+  private pendingAim(s: ShooterIn): void {
+    let ay = s.aimYaw, ap = s.aimPitch
+    for (let L = this.lag; L >= 1; L--) {
+      if (this.nCmd - L < 0) continue
+      const r = (this.nCmd - L) % NCMD
+      slewStep(ay, ap, this.cy[r], this.cp[r], s.turnRate, s.pitchRate, 2 * TICK, this.a2, s.minPitch, s.maxPitch)
+      ay = this.a2.yaw
+      ap = this.a2.pitch
+    }
+    this.a2.yaw = ay
+    this.a2.pitch = ap
+  }
+
+  /**
+   * Laser: direct aim (out) at the target centre (this.kin, from updateTarget) predicted to the tick a release sent
+   * now would fire on (t0 + 1 tick), from our position then. Returns the distance (m); the point is in this.lp.
+   */
+  laserAim(s: ShooterIn, out: Aim2): number {
+    const t1 = (2 * this.lag + 1) * TICK
+    const k = this.kin
+    predictKin(k, t1, this.o, this.lp)
+    this.lp.z += 0.5 * k.height
+    return aimAt(s.x + s.vx * t1, s.y + s.vy * t1, s.z + s.vz * t1, this.lp.x, this.lp.y, this.lp.z, out, s.muzzleH, s.muzzleOut)
+  }
+
+  /**
+   * Laser release gate: if the trigger is let go with (cmdYaw, cmdPitch) commanded now, the beam fires on tick
+   * t0 + 1 along the aim slewed through the pending commands and one tick toward ours, from our position then.
+   * True when it passes through the target cylinder (predicted to that tick, radius/height scaled by `shrink`)
+   * within range; the beam (muzzle -> exit point) is left in bx..ez for the caller's wall check.
+   */
+  laserGate(s: ShooterIn, cmdYaw: number, cmdPitch: number, shrink: number, range: number): boolean {
+    const t1 = (2 * this.lag + 1) * TICK
+    const k = this.kin
+    this.pendingAim(s)
+    slewStep(this.a2.yaw, this.a2.pitch, cmdYaw, cmdPitch, s.turnRate, s.pitchRate, TICK, this.a2, s.minPitch, s.maxPitch)
+    predictKin(k, t1, this.o, this.lpf)
+    const r = k.radius * shrink, h = k.height * shrink
+    const sx = s.x + s.vx * t1, sy = s.y + s.vy * t1, sz = s.z + s.vz * t1
+    const yaw = this.a2.yaw, pitch = this.a2.pitch
+    const d = aimHitsCylinder(sx, sy, sz, yaw, pitch, this.lpf.x, this.lpf.y, this.lpf.z + 0.5 * (k.height - h), r, h, range, s.muzzleH, s.muzzleOut)
+    if (d < 0) return false
+    const cp = Math.cos(pitch), c = Math.cos(yaw), sn = Math.sin(yaw)
+    this.bx = sx + s.muzzleOut * c
+    this.by = sy + s.muzzleOut * sn
+    this.bz = sz + s.muzzleH
+    // through the near half of the (unshrunk) target: a wall in front of it blocks, the ground behind it does not
+    const e = d + r
+    this.ex = this.bx + cp * c * e
+    this.ey = this.by + cp * sn * e
+    this.ez = this.bz + Math.sin(pitch) * e
+    return true
+  }
+
+  /** end of every decision: the aim and gun trigger we actually sent */
+  commit(yaw: number, pitch: number, fireGun: boolean): void {
+    const r = this.nCmd % NCMD
+    this.cy[r] = yaw
+    this.cp[r] = pitch
+    this.cf[r] = fireGun ? 1 : 0
+    this.nCmd++
+  }
+}

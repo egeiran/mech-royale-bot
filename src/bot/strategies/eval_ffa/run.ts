@@ -108,7 +108,11 @@ export function parseCand(spec: string): { name: string; seat: Seat } {
     bot = "main"
     params.forceMode = 2
   }
-  return { name: spec, seat: Object.keys(params).length ? { bot, params } : { bot } }
+  const rtGapMs = params.rtGapMs
+  delete params.rtGapMs
+  const seat: Seat = Object.keys(params).length ? { bot, params } : { bot }
+  if (rtGapMs !== undefined) seat.rtGapMs = rtGapMs
+  return { name: spec, seat }
 }
 
 // ---------------------------------------------------------------- one match
@@ -140,7 +144,7 @@ function engine() {
   })())
 }
 
-async function probedFactory(seat: Seat, probe: Probe, timeline: number): Promise<BotFactory> {
+async function probedFactory(seat: Seat, probe: Probe, timeline: number, tag: Record<string, unknown> = {}): Promise<BotFactory> {
   if (seat.bot !== "main") {
     const f = await resolveSeat(seat.bot)
     return (ctx: BotContext): Bot => {
@@ -158,12 +162,19 @@ async function probedFactory(seat: Seat, probe: Probe, timeline: number): Promis
     }
   }
   const { createBrain } = await import("../../brain/index.ts")
-  return (ctx: BotContext): Bot => {
+  const { evidenceLogger } = await import("./modeprobe.ts")
+  const gap = seat.rtGapMs
+  return (ctx0: BotContext): Bot => {
+    // fake realtime runner stats (the gap is measured when the next observation arrives: one per decision)
+    const rt = gap !== undefined ? { gaps: [] as number[], readyGapMs: gap } : null
+    const ctx: BotContext = rt ? { ...ctx0, rt } : ctx0
     const b = createBrain(ctx)
+    const ev = evidenceLogger(b, ctx, tag)
     return {
       name: b.name,
       act(obs: Observation): BotAction {
         observe(probe, obs)
+        if (rt && rt.gaps.length < 64 && obs.tick > 0) rt.gaps.push(gap!)
         const t0 = performance.now()
         let a: BotAction
         try {
@@ -174,6 +185,7 @@ async function probedFactory(seat: Seat, probe: Probe, timeline: number): Promis
           throw e
         }
         probe.ms.push(performance.now() - t0)
+        ev?.(obs)
         const bb = b.bb
         const it = b.lastIntent()
         if (bb.mode === 2 && probe.tFfa < 0) probe.tFfa = obs.t
@@ -225,7 +237,7 @@ export async function runEvalJob(job: EvalJob): Promise<EvalResult> {
     for (let i = 0, k = 0; i < 16; i++) {
       const s = i === seat ? cand : others[k++]!
       labels.push(seatLabel(s))
-      const factory = i === seat ? await probedFactory(s, probe, job.timeline ?? 0) : await resolveSeat(s.bot)
+      const factory = i === seat ? await probedFactory(s, probe, job.timeline ?? 0, { field: job.field, seed: job.seed, cand: job.candName }) : await resolveSeat(s.bot)
       const e: MatchEntry = { name: seatLabel(s), factory }
       if (s.params) e.params = s.params
       // calibration: FIN_PARAMS='{"duelP":0.3}' overrides knobs of every finalist imitation

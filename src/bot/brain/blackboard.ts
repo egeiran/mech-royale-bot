@@ -201,6 +201,11 @@ export class Blackboard {
   otherDeaths = 0
   quietDeaths = 0
   ffaLatched = false
+  /** positive SQUAD evidence latched (modeSquadLockT): no FFA latch any more */
+  squadLocked = false
+  /** runner wall-clock stats (realtime only; set by createBrain) and the timing hint: -1 not decided, 0 no, 1 yes */
+  rt: { gaps: number[] } | null = null
+  gapHint = -1
   private prevAlive = 16
 
   // ---- self
@@ -376,11 +381,25 @@ export class Blackboard {
         if (obs.t - this.tCombat > this.P.quietDeathS && this.nThreats === 0) this.quietDeaths += died
       }
     }
-    if (this.quietDeaths >= 2 || (this.quietDeaths >= 1 && obs.t < this.P.ffaEarlyT) || this.otherDeaths >= this.P.ffaOtherDeaths) this.ffaLatched = true
-    if (this.modeDet.logOdds >= this.P.ffaSoftLatch) this.ffaLatched = true
+    const P = this.P
+    // timing hint (final: 16 separate bots answer each tick; practice scorer: 1-5 ms) - decided once, after 16 gaps
+    if (P.modeGapMs > 0 && this.gapHint < 0 && this.rt && this.rt.gaps.length >= 16) {
+      const g = this.rt.gaps.slice(0, 16).sort((a, b) => a - b)
+      this.gapHint = 0.5 * (g[7]! + g[8]!) > P.modeGapMs ? 1 : 0
+    }
+    const hint = this.gapHint === 1
+    // positive SQUAD evidence: in an FFA somebody else has died by now (real showdowns: 43 of 43 by 30 s)
+    if (!this.squadLocked && !this.ffaLatched && !hint && P.modeSquadLockT > 0 && obs.t >= P.modeSquadLockT && this.otherDeaths === 0) this.squadLocked = true
+    if (!this.squadLocked) {
+      if (this.quietDeaths >= 2 || (this.quietDeaths >= 1 && obs.t < P.ffaEarlyT) || this.otherDeaths >= P.ffaOtherDeaths) this.ffaLatched = true
+      if (this.modeDet.logOdds >= P.ffaSoftLatch) this.ffaLatched = true
+      if (P.modeDeathsN > 0 && this.otherDeaths >= P.modeDeathsN && obs.t < P.modeDeathsT) this.ffaLatched = true
+      if (hint && this.otherDeaths >= P.modeGapDeaths && obs.t < 100) this.ffaLatched = true
+    }
+    const unknownUntil = hint && P.modeGapUnknownS > P.unknownSquadAfter ? P.modeGapUnknownS : P.unknownSquadAfter
     let mode = MODE_UNKNOWN
     if (this.ffaLatched) mode = MODE_FFA
-    else if (det === MODE_SQUAD || obs.t >= this.P.unknownSquadAfter) mode = MODE_SQUAD
+    else if (this.squadLocked || det === MODE_SQUAD || obs.t >= unknownUntil) mode = MODE_SQUAD
     this.mode = this.P.forceMode === 1 ? MODE_SQUAD : this.P.forceMode === 2 ? MODE_FFA : mode
     this.zone.update(obs.zone, obs.t)
     this.loot.update(obs, this.world, this.cfg, this.P.lootForgetS)

@@ -6,8 +6,8 @@
 import type { BotAction } from "../../contracts.ts"
 import type { Track } from "../perception/tracker.ts"
 import {
-  aimAt, aimError, hitProbGun, laserPlan, laserReleaseGate, LASER_CHARGE, leadGunObs, leadMortar, lightningTarget, newAimSolution,
-  newMortarSolution, slewStep, TICK, willHit, wrapPi, type Aim2,
+  aimAt, aimError, GunAimer, hitProbGun, laserPlan, laserReleaseGate, LASER_CHARGE, leadGunObs, leadMortar, lightningTarget, newAimSolution,
+  newGunIn, newMortarSolution, newShooterIn, slewStep, TICK, willHit, wrapPi, type Aim2,
 } from "../tactics/aim.ts"
 import { dodgeVector, faceThreatYaw, newDodgeOut, StrafeJitter, ThreatList, threatsFromProjectiles } from "../tactics/dodge.ts"
 import { L_PICKUP, type Blackboard } from "./blackboard.ts"
@@ -36,6 +36,10 @@ export class Executor {
   private readonly threats = new ThreatList(48)
   private readonly dodge = newDodgeOut()
   private readonly sol = newAimSolution()
+  /** gun/laser aim v1 (P.aimV 1): latency-aware lead + hit-probability gate, see tactics/aim.ts GunAimer */
+  private readonly aimer = new GunAimer()
+  private readonly shooterIn = newShooterIn()
+  private readonly gunIn = newGunIn()
   private readonly msol = newMortarSolution()
   private morReadyT = -1
   private lasFullT = -1
@@ -163,14 +167,40 @@ export class Executor {
     let shootingNow = false
     const pitchRate = me.stats.pitch_rate ?? 3
     const mOut = bb.radius + 0.5
+    const aimV = P.aimV > 0
+    if (aimV) {
+      this.aimer.observe(bb.t, me.aim[0], me.aim[1], bb.turnRate, pitchRate, me.stats.min_pitch ?? -0.7, me.stats.max_pitch ?? 1.3)
+      this.fillShooterIn(mOut, pitchRate)
+    }
 
     if (tgt && (it.weaponsFree || tgt.npc)) {
       const hh = 0.5 * tgt.height
       const tz = tgt.z + hh
       const sol = this.sol
       let gunOk = false
+      const v1 = aimV && !tgt.npc
+      if (v1) this.aimer.updateTarget(tgt.id, bb.t, tgt.x, tgt.y, tgt.z, tgt.vx, tgt.vy, tgt.vz, tgt.radius, tgt.height, bb.world ? bb.world.floorZ(tgt.x, tgt.y, tgt.z, 0.5) : tgt.z)
       // gun
-      if (bb.gun && bb.gunSlot >= 0) {
+      if (v1 && bb.gun && bb.gunSlot >= 0) {
+        // v1: lead with the capped-acceleration predictor for the fire time including the action latency; fire when
+        // the estimated hit probability (actual aim, spread, prediction error, dodge) is >= aimPStar
+        const g = bb.gun, gi = this.gunIn
+        gi.cooldown = g.cooldown ?? 0
+        gi.ammo = g.ammo ?? 1
+        gi.reload = g.reload ?? 0
+        gi.rate = g.stats.cooldown ?? 0.24
+        gi.mag = g.stats.mag ?? 12
+        gi.reloadS = g.stats.reload ?? 2.4
+        gi.speed = g.stats.speed ?? 252
+        gi.range = g.stats.range ?? 230
+        gi.spreadDeg = g.stats.spread_deg ?? 0.6
+        const ok = this.aimer.solve(this.shooterIn, gi, P.aimPStar, P.gunMaxDist)
+        const s1 = this.aimer.sol
+        wantYaw = s1.yaw
+        wantPitch = s1.pitch
+        aimed = true
+        if (ok && this.muzzleClear(s1.yaw, mOut, s1.ix, s1.iy, s1.iz)) gunOk = true
+      } else if (bb.gun && bb.gunSlot >= 0) {
         leadGunObs(me, bb.gunSlot, tgt.x, tgt.y, tz, tgt.vx, tgt.vy, tgt.vz, sol)
         wantYaw = sol.yaw
         wantPitch = sol.pitch
@@ -195,8 +225,15 @@ export class Executor {
         const las = bb.las
         const full = las.stats.charge ?? 0.75
         const charge = las.charge ?? 0
-        const px = tgt.x + tgt.vx * 0.1, py = tgt.y + tgt.vy * 0.1, pz = tz + tgt.vz * 0.1
-        const dist = aimAt(bb.x + bb.vx * 0.1, bb.y + bb.vy * 0.1, bb.z, px, py, pz, this.a2, bb.muzzleH, mOut)
+        let px = tgt.x + tgt.vx * 0.1, py = tgt.y + tgt.vy * 0.1, pz = tz + tgt.vz * 0.1
+        let dist: number
+        if (v1) {
+          // v1: direct aim at where the target will be on the release tick (after the action latency)
+          dist = this.aimer.laserAim(this.shooterIn, this.a2)
+          px = this.aimer.lp.x
+          py = this.aimer.lp.y
+          pz = this.aimer.lp.z
+        } else dist = aimAt(bb.x + bb.vx * 0.1, bb.y + bb.vy * 0.1, bb.z, px, py, pz, this.a2, bb.muzzleH, mOut)
         const los = bb.los[tgt.id] === 1 || tgt.npc
         const useLaser = dist <= Math.min(P.laserMaxDist, las.stats.range ?? 280) && !tgt.npc
         if (charge >= full - 1e-3) {
@@ -204,14 +241,18 @@ export class Executor {
         } else this.lasFullT = -1
         // laserKeepGun: keep the gun lead (and the gun firing) through the charge and release on it when the beam
         // would hit anyway; switch to the direct laser aim only after laserGunHoldS of full charge
-        const laserAim = P.laserKeepGun > 0 ? !gunOk || (this.lasFullT >= 0 && bb.t - this.lasFullT >= P.laserGunHoldS) : charge >= full - 0.25 || !gunOk
+        // v1 with action latency: the gun lead is then far from the beam line - go to the direct aim 0.25 s before full
+        // charge (lab, lag 2: 79 -> 89 % hits, +14 % laser DPS; lockstep keeps laserKeepGun: 93 -> 98 %)
+        const keepGun = P.laserKeepGun > 0 && !(v1 && this.aimer.lag > 0)
+        const laserAim = keepGun ? !gunOk || (this.lasFullT >= 0 && bb.t - this.lasFullT >= P.laserGunHoldS) : charge >= full - 0.25 || !gunOk
         if (useLaser || charge > 0) {
           const cy = laserAim ? this.a2.yaw : wantYaw
           const cp = laserAim ? this.a2.pitch : wantPitch
-          const on =
-            los &&
-            laserReleaseGate(bb.x, bb.y, bb.z, bb.vx, bb.vy, me.vel[2], me.aim[0], me.aim[1], cy, cp, tgt.x, tgt.y, tgt.z, tgt.vx, tgt.vy, tgt.vz, tgt.radius, tgt.height, las.stats.range ?? 280, bb.muzzleH, mOut, bb.turnRate, pitchRate, P.laserShrink) &&
-            this.muzzleClear(cy, mOut, px, py, pz)
+          const on = v1
+            ? los && this.aimer.laserGate(this.shooterIn, cy, cp, P.laserShrink, las.stats.range ?? 280) && this.beamClear()
+            : los &&
+              laserReleaseGate(bb.x, bb.y, bb.z, bb.vx, bb.vy, me.vel[2], me.aim[0], me.aim[1], cy, cp, tgt.x, tgt.y, tgt.z, tgt.vx, tgt.vy, tgt.vz, tgt.radius, tgt.height, las.stats.range ?? 280, bb.muzzleH, mOut, bb.turnRate, pitchRate, P.laserShrink) &&
+              this.muzzleClear(cy, mOut, px, py, pz)
           const plan = laserPlan(charge, las.cooldown, on, los ? 0 : Infinity, Infinity, full, full, las.stats.min_charge ?? 0.15, las.stats.hold_s ?? 2)
           if (plan === LASER_CHARGE && (useLaser || charge > 0)) {
             fire[bb.lasSlot] = true
@@ -385,7 +426,35 @@ export class Executor {
     const minP = me.stats.min_pitch ?? -0.7, maxP = me.stats.max_pitch ?? 1.3
     a.aim = [wrapPi(wantYaw), wantPitch < minP ? minP : wantPitch > maxP ? maxP : wantPitch]
     if (fire[0] || fire[1]) a.fire = [fire[0], fire[1]]
+    if (aimV) this.aimer.commit(a.aim[0], a.aim[1], bb.gunSlot >= 0 && fire[bb.gunSlot])
     return a
+  }
+
+  /** aim v1: our state for GunAimer (feet, velocity, actual aim, muzzle, torso rates) */
+  private fillShooterIn(mOut: number, pitchRate: number): void {
+    const bb = this.bb, me = bb.me, s = this.shooterIn
+    s.x = bb.x
+    s.y = bb.y
+    s.z = bb.z
+    s.vx = bb.vx
+    s.vy = bb.vy
+    s.vz = me.vel[2]
+    s.aimYaw = me.aim[0]
+    s.aimPitch = me.aim[1]
+    s.muzzleH = bb.muzzleH
+    s.muzzleOut = mOut
+    s.turnRate = bb.turnRate
+    s.pitchRate = pitchRate
+    s.minPitch = me.stats.min_pitch ?? -0.7
+    s.maxPitch = me.stats.max_pitch ?? 1.3
+  }
+
+  /** aim v1: the beam GunAimer.laserGate just validated reaches the target without hitting a wall */
+  private beamClear(): boolean {
+    const w = this.bb.world
+    if (!w) return true
+    const m = this.aimer
+    return w.segClear(m.bx, m.by, m.bz, m.ex, m.ey, m.ez)
   }
 
   /** the track when it is alive and present in this observation */

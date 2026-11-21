@@ -35,6 +35,14 @@ obs N leaves on tick N+k, k = max(1, ceil(cooldown/0.05)), along the aim after k
   the beam fired next tick (aim slewed one tick toward cmd) passes through the target cylinder. LOS is the caller's check.
 - `laserDamage(charge,damage?,chargeFull?,minFrac?)` -> hp.
 - `lightningTarget(obs,yaw,range?,coneDeg?,world?)` -> id the arc would hit (nearest mech/NPC/crate in cone and range), -1 = none.
+- Gun/laser aim v1 (params `aimV`, `aimPStar`; measured in `src/tools/aimlab`): `AIM_V1` options, `TargetKin` (`newTargetKin()`),
+  `predictKin(k,t,opts,out)` (constant velocity + 0.65 x latest accel for <= 0.25 s capped at the recent top speed, ballistic z when
+  airborne and not jetting), `leadGunV1(s..6, aimYaw,aimPitch, kin, aimZ, speed,range,cooldown, t0, out, opts, ...)` (t0 = s until our
+  command acts), `hitProbV1(sol,shotYaw,shotPitch,kin,aimZ,spreadDeg,opts)`.
+  `new GunAimer(opts?, fixedLag?)`: per decision `observe(t,aim..)` -> `updateTarget(id,t,pos,vel,radius,height,floorZ)` -> `solve(ShooterIn,GunIn,pStar,maxDist)`
+  (true = fire; aim in `.sol`, estimate in `.p`) / `laserAim(s,out)` / `laserGate(s,cmdYaw,cmdPitch,shrink,range)` (beam in `bx..ez` for a
+  wall check) -> `commit(finalYaw,finalPitch,gunFired)` on EVERY decision. `.lag` = online estimate of the extra action latency in decisions
+  (0 lockstep scorer, 2 public play server), used for the fire time, the pending commands' cooldown/ammo and the laser release tick.
 
 ## tactics/dodge.ts
 - `threatsFromProjectiles(obs.projectiles,self,out:ThreatList,gravity?,splashRadius?,groundZ?,maxBulletT?)` -> count with urgency > 0.

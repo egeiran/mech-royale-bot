@@ -21,6 +21,22 @@ export const DEFAULTS = {
   /** also latch FFA when the soft detector (perception/mode.ts log-odds) reaches this; 99 = off (its cues fire
    *  in squad matches too: hp drops, cross aim, far sounds reached +7.7 in a league squad match) */
   ffaSoftLatch: 99,
+  // ---- final-integration mode knobs (data/intel/final-plan.md); all off by default
+  /** this many deaths by another hand (quiet or not) before modeDeathsT latch FFA (0 = off). Real top-16
+   *  showdowns: the 2nd death by 25/30/35 s in 57/89/95 % of matches; squad sim: 2 by 45 s in ~2 % */
+  modeDeathsN: 0,
+  modeDeathsT: 45,
+  /** positive SQUAD evidence: nobody died by another hand by this time -> SQUAD for good (no FFA latch after it;
+   *  0 = off). Real showdowns: the 1st death came before 30 s in 43 of 43 matches */
+  modeSquadLockT: 0,
+  /** timing hint (0 = off): the median gap between our answer and the next observation over the first 16
+   *  decisions (runner ctx.rt.gaps) above this many ms means "not the practice scorer" (measured there: 1-5 ms).
+   *  It never switches the squad brain off on its own unless modeGapUnknownS > 0; it only: */
+  modeGapMs: 0,
+  /** ... latches FFA on this many deaths by another hand (any, before 100 s) and skips the squad lock */
+  modeGapDeaths: 1,
+  /** ... plays the UNKNOWN (FFA ghost) opening until this time (0 = no: squad opening as without the hint) */
+  modeGapUnknownS: 0,
 
   // ---------------------------------------------------------------- engagement range
   /** preferred duel distance with gun only */
@@ -153,6 +169,14 @@ export const DEFAULTS = {
   fightJumpRate: 0.0,
 
   // ---------------------------------------------------------------- fire control
+  /** gun + laser aim version: 0 = old (leadGunObs + willHit/hitProbGun gate, laserReleaseGate), 1 = v1 (tactics/aim.ts
+   *  GunAimer: online action-latency estimate, capped-acceleration + ballistic lead for the real fire time, hit-
+   *  probability gate, laser gate on the release tick with a beam wall check). Offline lab (src/tools/aimlab) on our
+   *  real play trajectories: lockstep +1.4 DPS [0.2, 2.6] gun, laser 93 -> 98 %; play server (2-decision latency)
+   *  +14.6 DPS [10.5, 19.1] (gun hit rate 47 -> 59 %) */
+  aimV: 1,
+  /** aim v1: minimum estimated gun hit probability to pull the trigger on a mech (lab optimum 0.1-0.3, flat) */
+  aimPStar: 0.15,
   /** minimum estimated gun hit probability to pull the trigger on a mech */
   fireMinP: 0.12,
   /** never fire the gun at a mech beyond this */

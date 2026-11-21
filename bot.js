@@ -2795,6 +2795,9 @@ class Blackboard {
   otherDeaths = 0;
   quietDeaths = 0;
   ffaLatched = false;
+  squadLocked = false;
+  rt = null;
+  gapHint = -1;
   prevAlive = 16;
   x = 0;
   y = 0;
@@ -2944,14 +2947,29 @@ class Blackboard {
           this.quietDeaths += died;
       }
     }
-    if (this.quietDeaths >= 2 || this.quietDeaths >= 1 && obs.t < this.P.ffaEarlyT || this.otherDeaths >= this.P.ffaOtherDeaths)
-      this.ffaLatched = true;
-    if (this.modeDet.logOdds >= this.P.ffaSoftLatch)
-      this.ffaLatched = true;
+    const P = this.P;
+    if (P.modeGapMs > 0 && this.gapHint < 0 && this.rt && this.rt.gaps.length >= 16) {
+      const g = this.rt.gaps.slice(0, 16).sort((a, b) => a - b);
+      this.gapHint = 0.5 * (g[7] + g[8]) > P.modeGapMs ? 1 : 0;
+    }
+    const hint = this.gapHint === 1;
+    if (!this.squadLocked && !this.ffaLatched && !hint && P.modeSquadLockT > 0 && obs.t >= P.modeSquadLockT && this.otherDeaths === 0)
+      this.squadLocked = true;
+    if (!this.squadLocked) {
+      if (this.quietDeaths >= 2 || this.quietDeaths >= 1 && obs.t < P.ffaEarlyT || this.otherDeaths >= P.ffaOtherDeaths)
+        this.ffaLatched = true;
+      if (this.modeDet.logOdds >= P.ffaSoftLatch)
+        this.ffaLatched = true;
+      if (P.modeDeathsN > 0 && this.otherDeaths >= P.modeDeathsN && obs.t < P.modeDeathsT)
+        this.ffaLatched = true;
+      if (hint && this.otherDeaths >= P.modeGapDeaths && obs.t < 100)
+        this.ffaLatched = true;
+    }
+    const unknownUntil = hint && P.modeGapUnknownS > P.unknownSquadAfter ? P.modeGapUnknownS : P.unknownSquadAfter;
     let mode = MODE_UNKNOWN;
     if (this.ffaLatched)
       mode = MODE_FFA;
-    else if (det === MODE_SQUAD || obs.t >= this.P.unknownSquadAfter)
+    else if (this.squadLocked || det === MODE_SQUAD || obs.t >= unknownUntil)
       mode = MODE_SQUAD;
     this.mode = this.P.forceMode === 1 ? MODE_SQUAD : this.P.forceMode === 2 ? MODE_FFA : mode;
     this.zone.update(obs.zone, obs.t);
@@ -3388,6 +3406,337 @@ function lightningTarget(obs, yaw, range = 45, coneDeg = 30, world) {
   }
   return best;
 }
+var AIM_V1 = {
+  accelFrac: 0.65,
+  accelHorizon: 0.25,
+  vmaxFloor: 6,
+  ballistic: 1,
+  gravity: 22,
+  jetVz: 7.5,
+  aimHeight: 0.5,
+  predC: 6.3,
+  predExp: 1.55,
+  dodgeK: 1.75,
+  dodgeT0: 0.1,
+  dodgeMax: 2,
+  pad: 0.3
+};
+function newTargetKin() {
+  return { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ax: 0, ay: 0, az: NaN, vmax: 0, airborne: false, groundZ: -1e9, radius: 2.5, height: 9 };
+}
+function predictKin(k, t, o, out) {
+  let { x, y, vx, vy } = k;
+  let ta = t < o.accelHorizon ? t : o.accelHorizon;
+  const ax = k.ax * o.accelFrac, ay = k.ay * o.accelFrac;
+  if (ta > 0 && (ax !== 0 || ay !== 0)) {
+    const cap = k.vmax > o.vmaxFloor ? k.vmax : o.vmaxFloor;
+    const cap2 = cap * cap;
+    const n = Math.ceil(ta / 0.025);
+    const dt = ta / n;
+    let accel = true;
+    for (let i = 0;i < n; i++) {
+      if (accel) {
+        const nvx = vx + ax * dt, nvy = vy + ay * dt;
+        const s2 = nvx * nvx + nvy * nvy;
+        if (s2 > cap2 && s2 > vx * vx + vy * vy) {
+          const f = cap / Math.sqrt(s2);
+          vx = nvx * f;
+          vy = nvy * f;
+          accel = false;
+        } else {
+          vx = nvx;
+          vy = nvy;
+        }
+      }
+      x += vx * dt;
+      y += vy * dt;
+    }
+  } else
+    ta = 0;
+  out.x = x + vx * (t - ta);
+  out.y = y + vy * (t - ta);
+  const jet = k.az === k.az ? k.az > -0.5 * o.gravity : k.vz >= o.jetVz && k.vz <= 10.5;
+  if (o.ballistic > 0 && k.airborne && !jet) {
+    const z = k.z + k.vz * t - 0.5 * o.gravity * t * t;
+    out.z = z > k.groundZ ? z : k.groundZ > k.z ? k.z : k.groundZ;
+  } else
+    out.z = k.z + k.vz * t;
+}
+var _pk = { x: 0, y: 0, z: 0 };
+function leadGunV1(sx, sy, sz, svx, svy, svz, aimYaw, aimPitch, k, aimZ, projSpeed, range, cooldown, t0, out, o, muzzleHeight = 7, muzzleOut = 3, turnRate = 4, pitchRate = 3, minPitch = -0.7, maxPitch = 1.3) {
+  let kt = Math.ceil(cooldown / TICK - 0.000001);
+  if (kt < 1)
+    kt = 1;
+  let yaw = 0, pitch = 0, s = 0, tL = 0, { x: ix, y: iy } = k, iz = k.z + aimZ;
+  {
+    const dx = k.x - sx, dy = k.y - sy, dz = k.z + aimZ - (sz + muzzleHeight);
+    s = Math.sqrt(dx * dx + dy * dy + dz * dz) / projSpeed;
+  }
+  for (let outer = 0;outer < 5; outer++) {
+    const tFire = t0 + kt * TICK;
+    tL = tFire - TICK;
+    const bx = sx + svx * tFire, by = sy + svy * tFire, bz = sz + svz * tFire + muzzleHeight;
+    let h = 0, dz = 0, hx = 0, hy = 0;
+    for (let i = 0;i < 3; i++) {
+      predictKin(k, tL + s, o, _pk);
+      ix = _pk.x;
+      iy = _pk.y;
+      iz = _pk.z + aimZ;
+      hx = ix - bx;
+      hy = iy - by;
+      h = Math.sqrt(hx * hx + hy * hy) - muzzleOut;
+      if (h < 0.01)
+        h = 0.01;
+      dz = iz - bz;
+      s = Math.sqrt(h * h + dz * dz) / projSpeed;
+    }
+    yaw = Math.atan2(hy, hx);
+    pitch = Math.atan2(dz, h);
+    const ks = Math.ceil(slewTime(aimYaw, aimPitch, yaw, clamp(pitch, minPitch, maxPitch), turnRate, pitchRate) / TICK - 0.000001);
+    if (ks <= kt)
+      break;
+    kt = ks;
+  }
+  out.yaw = yaw;
+  out.pitch = pitch;
+  out.tof = s;
+  out.tFire = t0 + kt * TICK;
+  out.tHit = tL + s;
+  out.dist = s * projSpeed;
+  out.ix = ix;
+  out.iy = iy;
+  out.iz = iz;
+  out.inRange = out.dist <= range && pitch >= minPitch && pitch <= maxPitch;
+  return out.inRange;
+}
+function hitProbV1(sol, shotYaw, shotPitch, k, aimZ, spreadDeg, o) {
+  const d = sol.dist > 1 ? sol.dist : 1;
+  const ey = wrapPi4(sol.yaw - shotYaw) * Math.cos(sol.pitch) * d;
+  const ev = (sol.pitch - shotPitch) * d + (aimZ - 0.5 * k.height);
+  const ss = d * spreadDeg * DEG;
+  const tau = sol.tHit > 0 ? sol.tHit : 0;
+  const sp = o.predC * Math.pow(tau, o.predExp);
+  const sl = Math.sqrt(ss * ss + sp * sp);
+  const fl = sol.tof - o.dodgeT0;
+  let R = k.radius + o.pad - (fl > 0 ? Math.min(o.dodgeMax, o.dodgeK * fl) : 0);
+  if (R < 0.3)
+    R = 0.3;
+  const pl = 0.5 * (erf((R - ey) / (1.4142135623730951 * sl)) + erf((R + ey) / (1.4142135623730951 * sl)));
+  const spz = k.airborne ? 0.5 * sp : 0.15 * sp;
+  const sv = Math.sqrt(ss * ss + spz * spz);
+  const hh = 0.5 * k.height + o.pad;
+  const pv = 0.5 * (erf((hh - ev) / (1.4142135623730951 * sv)) + erf((hh + ev) / (1.4142135623730951 * sv)));
+  return pl * pv;
+}
+function newGunIn() {
+  return { cooldown: 0, ammo: 12, reload: 0, rate: 0.24, mag: 12, reloadS: 2.4, speed: 252, range: 230, spreadDeg: 0.6 };
+}
+function newShooterIn() {
+  return { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, aimYaw: 0, aimPitch: 0, muzzleH: 7, muzzleOut: 3, turnRate: 4, pitchRate: 3, minPitch: -0.7, maxPitch: 1.3 };
+}
+var NCMD = 8;
+var MAX_LAG = 3;
+
+class GunAimer {
+  lag = 0;
+  kin = newTargetKin();
+  sol = newAimSolution();
+  p = 0;
+  aimZ = 4.5;
+  t0 = 0;
+  votes = new Float64Array(MAX_LAG + 1);
+  o;
+  cy = new Float64Array(NCMD);
+  cp = new Float64Array(NCMD);
+  cf = new Uint8Array(NCMD);
+  nCmd = 0;
+  prevT = -1;
+  prevYaw = 0;
+  prevPitch = 0;
+  lvx = new Float64Array(16);
+  lvy = new Float64Array(16);
+  lvz = new Float64Array(16);
+  lt = new Float64Array(16).fill(-1);
+  vmx = new Float64Array(16);
+  a2 = { yaw: 0, pitch: 0 };
+  constructor(opts = AIM_V1, fixedLag = -1) {
+    this.o = opts;
+    if (fixedLag >= 0) {
+      this.lag = fixedLag;
+      this.fixed = true;
+    }
+  }
+  fixed = false;
+  observe(t, aimYaw, aimPitch, turnRate, pitchRate, minPitch = -0.7, maxPitch = 1.3) {
+    const dt = t - this.prevT;
+    if (!this.fixed && this.prevT >= 0 && dt > 0.05 && dt < 0.15 && this.nCmd > MAX_LAG) {
+      let best = -1, bestE = Infinity, second = Infinity;
+      for (let L = 0;L <= MAX_LAG; L++) {
+        const r = (this.nCmd - 1 - L) % NCMD;
+        slewStep(this.prevYaw, this.prevPitch, this.cy[r], this.cp[r], turnRate, pitchRate, 2 * TICK, this.a2, minPitch, maxPitch);
+        const e = Math.abs(wrapPi4(aimYaw - this.a2.yaw)) + Math.abs(aimPitch - this.a2.pitch);
+        if (e < bestE) {
+          second = bestE;
+          bestE = e;
+          best = L;
+        } else if (e < second)
+          second = e;
+      }
+      if (best >= 0 && bestE < 0.002 && second > 0.01) {
+        for (let L = 0;L <= MAX_LAG; L++)
+          this.votes[L] *= 0.98;
+        this.votes[best] += 1;
+        let arg = 0;
+        for (let L = 1;L <= MAX_LAG; L++)
+          if (this.votes[L] > this.votes[arg])
+            arg = L;
+        if (arg !== this.lag && this.votes[arg] >= 4 && this.votes[arg] > 2 * this.votes[this.lag])
+          this.lag = arg;
+      }
+    }
+    this.prevT = t;
+    this.prevYaw = aimYaw;
+    this.prevPitch = aimPitch;
+  }
+  updateTarget(id, t, x, y, z, vx, vy, vz, radius, height, groundZ) {
+    const k = this.kin;
+    k.x = x;
+    k.y = y;
+    k.z = z;
+    k.vx = vx;
+    k.vy = vy;
+    k.vz = vz;
+    k.radius = radius;
+    k.height = height;
+    k.groundZ = groundZ;
+    k.airborne = Math.abs(vz) > 0.3 || z - groundZ > 0.8;
+    k.ax = 0;
+    k.ay = 0;
+    k.az = NaN;
+    const sp = Math.sqrt(vx * vx + vy * vy);
+    if (id >= 0 && id < 16) {
+      const dt = t - this.lt[id];
+      if (this.lt[id] >= 0 && dt > 0.05 && dt < 0.15) {
+        k.ax = (vx - this.lvx[id]) / dt;
+        k.ay = (vy - this.lvy[id]) / dt;
+        k.az = (vz - this.lvz[id]) / dt;
+      }
+      const decay = this.lt[id] >= 0 && dt > 0 && dt < 2 ? Math.exp(-dt / 2) : 0;
+      this.vmx[id] = Math.max(sp, this.vmx[id] * decay);
+      k.vmax = this.vmx[id];
+      this.lvx[id] = vx;
+      this.lvy[id] = vy;
+      this.lvz[id] = vz;
+      this.lt[id] = t;
+    } else
+      k.vmax = sp;
+    return k;
+  }
+  solve(s, g, pStar, maxDist) {
+    const o = this.o;
+    const lag = this.lag;
+    let { cooldown: cd, ammo: am, reload: rl } = g;
+    let { aimYaw: ay, aimPitch: ap } = s;
+    for (let L = lag;L >= 1; L--) {
+      if (this.nCmd - L < 0)
+        continue;
+      const r = (this.nCmd - L) % NCMD;
+      for (let j = 0;j < 2; j++) {
+        slewStep(ay, ap, this.cy[r], this.cp[r], s.turnRate, s.pitchRate, TICK, this.a2, s.minPitch, s.maxPitch);
+        ay = this.a2.yaw;
+        ap = this.a2.pitch;
+        if (rl > 0) {
+          rl -= TICK;
+          if (rl <= 0.000000001) {
+            rl = 0;
+            am = g.mag;
+          }
+        }
+        cd -= TICK;
+        if (this.cf[r] && rl <= 0 && am > 0 && cd <= 0.000000001) {
+          cd += g.rate;
+          am--;
+        } else if (cd < 0)
+          cd = 0;
+      }
+    }
+    if (cd < 0)
+      cd = 0;
+    const t0 = 2 * lag * TICK;
+    this.t0 = t0;
+    const k = this.kin;
+    const aimZ = (k.airborne ? 0.5 : o.aimHeight) * k.height;
+    this.aimZ = aimZ;
+    const sol = this.sol;
+    const wait = rl > cd ? rl : cd;
+    leadGunV1(s.x, s.y, s.z, s.vx, s.vy, s.vz, ay, ap, k, aimZ, g.speed, g.range, wait < 0.3 ? wait : 0.3, t0, sol, o, s.muzzleH, s.muzzleOut, s.turnRate, s.pitchRate, s.minPitch, s.maxPitch);
+    this.p = 0;
+    if (rl > 0 || am <= 0 || !sol.inRange || sol.dist > maxDist)
+      return false;
+    if (sol.tFire - t0 > DECISION_DT + 0.000001)
+      return false;
+    slewStep(ay, ap, sol.yaw, sol.pitch, s.turnRate, s.pitchRate, sol.tFire - t0, this.a2, s.minPitch, s.maxPitch);
+    this.p = hitProbV1(sol, this.a2.yaw, this.a2.pitch, k, aimZ, g.spreadDeg, o);
+    return this.p >= pStar;
+  }
+  lp = { x: 0, y: 0, z: 0 };
+  bx = 0;
+  by = 0;
+  bz = 0;
+  ex = 0;
+  ey = 0;
+  ez = 0;
+  lpf = { x: 0, y: 0, z: 0 };
+  pendingAim(s) {
+    let { aimYaw: ay, aimPitch: ap } = s;
+    for (let L = this.lag;L >= 1; L--) {
+      if (this.nCmd - L < 0)
+        continue;
+      const r = (this.nCmd - L) % NCMD;
+      slewStep(ay, ap, this.cy[r], this.cp[r], s.turnRate, s.pitchRate, 2 * TICK, this.a2, s.minPitch, s.maxPitch);
+      ay = this.a2.yaw;
+      ap = this.a2.pitch;
+    }
+    this.a2.yaw = ay;
+    this.a2.pitch = ap;
+  }
+  laserAim(s, out) {
+    const t1 = (2 * this.lag + 1) * TICK;
+    const k = this.kin;
+    predictKin(k, t1, this.o, this.lp);
+    this.lp.z += 0.5 * k.height;
+    return aimAt(s.x + s.vx * t1, s.y + s.vy * t1, s.z + s.vz * t1, this.lp.x, this.lp.y, this.lp.z, out, s.muzzleH, s.muzzleOut);
+  }
+  laserGate(s, cmdYaw, cmdPitch, shrink, range) {
+    const t1 = (2 * this.lag + 1) * TICK;
+    const k = this.kin;
+    this.pendingAim(s);
+    slewStep(this.a2.yaw, this.a2.pitch, cmdYaw, cmdPitch, s.turnRate, s.pitchRate, TICK, this.a2, s.minPitch, s.maxPitch);
+    predictKin(k, t1, this.o, this.lpf);
+    const r = k.radius * shrink, h = k.height * shrink;
+    const sx = s.x + s.vx * t1, sy = s.y + s.vy * t1, sz = s.z + s.vz * t1;
+    const yaw = this.a2.yaw, pitch = this.a2.pitch;
+    const d = aimHitsCylinder(sx, sy, sz, yaw, pitch, this.lpf.x, this.lpf.y, this.lpf.z + 0.5 * (k.height - h), r, h, range, s.muzzleH, s.muzzleOut);
+    if (d < 0)
+      return false;
+    const cp = Math.cos(pitch), c = Math.cos(yaw), sn = Math.sin(yaw);
+    this.bx = sx + s.muzzleOut * c;
+    this.by = sy + s.muzzleOut * sn;
+    this.bz = sz + s.muzzleH;
+    const e = d + r;
+    this.ex = this.bx + cp * c * e;
+    this.ey = this.by + cp * sn * e;
+    this.ez = this.bz + Math.sin(pitch) * e;
+    return true;
+  }
+  commit(yaw, pitch, fireGun) {
+    const r = this.nCmd % NCMD;
+    this.cy[r] = yaw;
+    this.cp[r] = pitch;
+    this.cf[r] = fireGun ? 1 : 0;
+    this.nCmd++;
+  }
+}
 
 // src/bot/tactics/dodge.ts
 var THREAT_GUN = 0;
@@ -3790,6 +4139,9 @@ class Executor {
   threats = new ThreatList(48);
   dodge = newDodgeOut();
   sol = newAimSolution();
+  aimer = new GunAimer;
+  shooterIn = newShooterIn();
+  gunIn = newGunIn();
   msol = newMortarSolution();
   morReadyT = -1;
   lasFullT = -1;
@@ -3909,12 +4261,38 @@ class Executor {
     let shootingNow = false;
     const pitchRate = me.stats.pitch_rate ?? 3;
     const mOut = bb.radius + 0.5;
+    const aimV = P.aimV > 0;
+    if (aimV) {
+      this.aimer.observe(bb.t, me.aim[0], me.aim[1], bb.turnRate, pitchRate, me.stats.min_pitch ?? -0.7, me.stats.max_pitch ?? 1.3);
+      this.fillShooterIn(mOut, pitchRate);
+    }
     if (tgt && (it.weaponsFree || tgt.npc)) {
       const hh = 0.5 * tgt.height;
       const tz = tgt.z + hh;
       const sol = this.sol;
       let gunOk = false;
-      if (bb.gun && bb.gunSlot >= 0) {
+      const v1 = aimV && !tgt.npc;
+      if (v1)
+        this.aimer.updateTarget(tgt.id, bb.t, tgt.x, tgt.y, tgt.z, tgt.vx, tgt.vy, tgt.vz, tgt.radius, tgt.height, bb.world ? bb.world.floorZ(tgt.x, tgt.y, tgt.z, 0.5) : tgt.z);
+      if (v1 && bb.gun && bb.gunSlot >= 0) {
+        const g = bb.gun, gi = this.gunIn;
+        gi.cooldown = g.cooldown ?? 0;
+        gi.ammo = g.ammo ?? 1;
+        gi.reload = g.reload ?? 0;
+        gi.rate = g.stats.cooldown ?? 0.24;
+        gi.mag = g.stats.mag ?? 12;
+        gi.reloadS = g.stats.reload ?? 2.4;
+        gi.speed = g.stats.speed ?? 252;
+        gi.range = g.stats.range ?? 230;
+        gi.spreadDeg = g.stats.spread_deg ?? 0.6;
+        const ok = this.aimer.solve(this.shooterIn, gi, P.aimPStar, P.gunMaxDist);
+        const s1 = this.aimer.sol;
+        wantYaw = s1.yaw;
+        wantPitch = s1.pitch;
+        aimed = true;
+        if (ok && this.muzzleClear(s1.yaw, mOut, s1.ix, s1.iy, s1.iz))
+          gunOk = true;
+      } else if (bb.gun && bb.gunSlot >= 0) {
         leadGunObs(me, bb.gunSlot, tgt.x, tgt.y, tz, tgt.vx, tgt.vy, tgt.vz, sol);
         wantYaw = sol.yaw;
         wantPitch = sol.pitch;
@@ -3939,8 +4317,15 @@ class Executor {
         const las = bb.las;
         const full = las.stats.charge ?? 0.75;
         const charge = las.charge ?? 0;
-        const px = tgt.x + tgt.vx * 0.1, py = tgt.y + tgt.vy * 0.1, pz = tz + tgt.vz * 0.1;
-        const dist = aimAt(bb.x + bb.vx * 0.1, bb.y + bb.vy * 0.1, bb.z, px, py, pz, this.a2, bb.muzzleH, mOut);
+        let px = tgt.x + tgt.vx * 0.1, py = tgt.y + tgt.vy * 0.1, pz = tz + tgt.vz * 0.1;
+        let dist;
+        if (v1) {
+          dist = this.aimer.laserAim(this.shooterIn, this.a2);
+          px = this.aimer.lp.x;
+          py = this.aimer.lp.y;
+          pz = this.aimer.lp.z;
+        } else
+          dist = aimAt(bb.x + bb.vx * 0.1, bb.y + bb.vy * 0.1, bb.z, px, py, pz, this.a2, bb.muzzleH, mOut);
         const los = bb.los[tgt.id] === 1 || tgt.npc;
         const useLaser = dist <= Math.min(P.laserMaxDist, las.stats.range ?? 280) && !tgt.npc;
         if (charge >= full - 0.001) {
@@ -3948,11 +4333,12 @@ class Executor {
             this.lasFullT = bb.t;
         } else
           this.lasFullT = -1;
-        const laserAim = P.laserKeepGun > 0 ? !gunOk || this.lasFullT >= 0 && bb.t - this.lasFullT >= P.laserGunHoldS : charge >= full - 0.25 || !gunOk;
+        const keepGun = P.laserKeepGun > 0 && !(v1 && this.aimer.lag > 0);
+        const laserAim = keepGun ? !gunOk || this.lasFullT >= 0 && bb.t - this.lasFullT >= P.laserGunHoldS : charge >= full - 0.25 || !gunOk;
         if (useLaser || charge > 0) {
           const cy = laserAim ? this.a2.yaw : wantYaw;
           const cp = laserAim ? this.a2.pitch : wantPitch;
-          const on = los && laserReleaseGate(bb.x, bb.y, bb.z, bb.vx, bb.vy, me.vel[2], me.aim[0], me.aim[1], cy, cp, tgt.x, tgt.y, tgt.z, tgt.vx, tgt.vy, tgt.vz, tgt.radius, tgt.height, las.stats.range ?? 280, bb.muzzleH, mOut, bb.turnRate, pitchRate, P.laserShrink) && this.muzzleClear(cy, mOut, px, py, pz);
+          const on = v1 ? los && this.aimer.laserGate(this.shooterIn, cy, cp, P.laserShrink, las.stats.range ?? 280) && this.beamClear() : los && laserReleaseGate(bb.x, bb.y, bb.z, bb.vx, bb.vy, me.vel[2], me.aim[0], me.aim[1], cy, cp, tgt.x, tgt.y, tgt.z, tgt.vx, tgt.vy, tgt.vz, tgt.radius, tgt.height, las.stats.range ?? 280, bb.muzzleH, mOut, bb.turnRate, pitchRate, P.laserShrink) && this.muzzleClear(cy, mOut, px, py, pz);
           const plan = laserPlan(charge, las.cooldown, on, los ? 0 : Infinity, Infinity, full, full, las.stats.min_charge ?? 0.15, las.stats.hold_s ?? 2);
           if (plan === LASER_CHARGE && (useLaser || charge > 0)) {
             fire[bb.lasSlot] = true;
@@ -4122,7 +4508,33 @@ class Executor {
     a.aim = [wrapPi4(wantYaw), wantPitch < minP ? minP : wantPitch > maxP ? maxP : wantPitch];
     if (fire[0] || fire[1])
       a.fire = [fire[0], fire[1]];
+    if (aimV)
+      this.aimer.commit(a.aim[0], a.aim[1], bb.gunSlot >= 0 && fire[bb.gunSlot]);
     return a;
+  }
+  fillShooterIn(mOut, pitchRate) {
+    const bb = this.bb, me = bb.me, s = this.shooterIn;
+    s.x = bb.x;
+    s.y = bb.y;
+    s.z = bb.z;
+    s.vx = bb.vx;
+    s.vy = bb.vy;
+    s.vz = me.vel[2];
+    s.aimYaw = me.aim[0];
+    s.aimPitch = me.aim[1];
+    s.muzzleH = bb.muzzleH;
+    s.muzzleOut = mOut;
+    s.turnRate = bb.turnRate;
+    s.pitchRate = pitchRate;
+    s.minPitch = me.stats.min_pitch ?? -0.7;
+    s.maxPitch = me.stats.max_pitch ?? 1.3;
+  }
+  beamClear() {
+    const w = this.bb.world;
+    if (!w)
+      return true;
+    const m = this.aimer;
+    return w.segClear(m.bx, m.by, m.bz, m.ex, m.ey, m.ez);
   }
   liveTarget(id) {
     const tr = this.bb.tracker.get(id);
@@ -6217,6 +6629,12 @@ var DEFAULTS = {
   ffaEarlyT: 45,
   ffaOtherDeaths: 5,
   ffaSoftLatch: 99,
+  modeDeathsN: 0,
+  modeDeathsT: 45,
+  modeSquadLockT: 0,
+  modeGapMs: 0,
+  modeGapDeaths: 1,
+  modeGapUnknownS: 0,
   rangeGun: 14,
   rangeLightning: 14,
   rangeLaser: 0,
@@ -6280,6 +6698,8 @@ var DEFAULTS = {
   strafeMin: 0.35,
   strafeMax: 1,
   fightJumpRate: 0,
+  aimV: 1,
+  aimPStar: 0.15,
   fireMinP: 0.12,
   gunMaxDist: 210,
   fireMarginSigma: 0.6,
@@ -9118,6 +9538,7 @@ function decideFfa(bb, mv, sc) {
 var BOT_NAME = "ai-caramba";
 function createBrain(ctx) {
   const bb = new Blackboard(ctx.hello, ctx.world, resolveParams(ctx.params), ctx.rng);
+  bb.rt = ctx.rt ?? null;
   const mover = new Mover(ctx.world, ctx.hello.config.mech);
   const exec = new Executor(bb, mover);
   const sc = new SquadScratch;
@@ -9236,5 +9657,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-style1h.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, finishChaseHp: 0.2, gunFarDist: 120, rangeGunOnly: 55 } });
+// src/entries/pj-style1f.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5 } });

@@ -23,6 +23,7 @@ export const BOT_NAME = "ai-caramba"
 
 export function createBrain(ctx: BotContext): BrainBot {
   const bb = new Blackboard(ctx.hello, ctx.world, resolveParams(ctx.params), ctx.rng)
+  bb.rt = ctx.rt ?? null // timing hint for the mode decision (modeGapMs)
   const mover = new Mover(ctx.world, ctx.hello.config.mech)
   const exec = new Executor(bb, mover)
   const sc = new SquadScratch()
