@@ -31,7 +31,6 @@ export function ourDps(bb: Blackboard, e: Track, dist: number): number {
     if (e.weapons & W_MORTAR) d *= 1 + (la.stats.cookoff ?? 0.6)
     dps += d
   }
-  if (bb.mor && P.mortarFire > 0 && dist >= P.mortarMinDist && dist <= P.mortarMaxDist) dps += ((bb.mor.stats.damage ?? 200) * 0.6) / (bb.mor.stats.cooldown ?? 2.6)
   return dps * bb.dmgMult
 }
 

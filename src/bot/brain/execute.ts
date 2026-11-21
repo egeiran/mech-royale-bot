@@ -6,14 +6,14 @@
 import type { BotAction } from "../../contracts.ts"
 import type { Track } from "../perception/tracker.ts"
 import {
-  aimAt, aimError, hitProbGun, laserPlan, laserReleaseGate, LASER_CHARGE, leadGunObs, leadMortar, lightningTarget, newAimSolution,
-  newMortarSolution, slewStep, TICK, willHit, wrapPi, type Aim2,
+  aimAt, hitProbGun, laserPlan, laserReleaseGate, LASER_CHARGE, leadGunObs, lightningTarget, newAimSolution,
+  slewStep, TICK, willHit, wrapPi, type Aim2,
 } from "../tactics/aim.ts"
 import { dodgeVector, faceThreatYaw, newDodgeOut, StrafeJitter, ThreatList, threatsFromProjectiles } from "../tactics/dodge.ts"
 import { L_PICKUP, type Blackboard } from "./blackboard.ts"
 import {
   FACE_SCAN, FACE_THREATS, FACE_TRAVEL, FACE_YAW, K_CAPTURE, K_FIGHT, K_HOLD, K_IDLE, PACE_BOOST, PACE_SILENT,
-  STYLE_HOLD, STYLE_PEEK, STYLE_SPOT, type Intent,
+  STYLE_HOLD, STYLE_PEEK, type Intent,
 } from "./intent.ts"
 import type { Mover } from "./navx.ts"
 
@@ -36,9 +36,6 @@ export class Executor {
   private readonly threats = new ThreatList(48)
   private readonly dodge = newDodgeOut()
   private readonly sol = newAimSolution()
-  private readonly msol = newMortarSolution()
-  private morReadyT = -1
-  private morSkipUntil = -1
   private readonly a2: Aim2 = { yaw: 0, pitch: 0 }
   private readonly slew: Aim2 = { yaw: 0, pitch: 0 }
   private readonly bearings = new Float64Array(8)
@@ -205,32 +202,6 @@ export class Executor {
           } else if (charge > 0) st.laserReleases++
         }
       }
-      // mortar: flat arc onto the target's feet when it is ready and the blast lands clear of us. The gun shares
-      // the aim, so the torso dips for this one shot every ~2.6 s (the gun gate below uses the actual aim).
-      if (bb.mor && bb.mor.cooldown > 0.2) this.morReadyT = -1
-      if (bb.mor && bb.morSlot >= 0 && P.mortarFire > 0 && !tgt.npc && bb.mor.cooldown <= 0.2 && bb.t >= this.morSkipUntil && bb.los[tgt.id] === 1 && tgt.dist >= P.mortarMinDist && tgt.dist <= P.mortarMaxDist) {
-        if (this.morReadyT < 0) this.morReadyT = bb.t
-        // the aim never settles on the lob (fast-moving target, slewing between gun and mortar): give the gun 1 s
-        if (bb.t - this.morReadyT > 0.6) {
-          this.morSkipUntil = bb.t + 1
-          this.morReadyT = -1
-        }
-        const mc = bb.cfg.weapons.mortar
-        const ms = this.msol
-        const minP = me.stats.min_pitch ?? -0.7, maxP = me.stats.max_pitch ?? 1.3
-        if (
-          leadMortar(bb.x, bb.y, bb.z, bb.vx, bb.vy, me.aim[0], me.aim[1], tgt.x, tgt.y, tgt.z, tgt.vx, tgt.vy, bb.mor.stats.speed ?? mc.speed ?? 72, mc.gravity ?? 22, false, bb.mor.cooldown, ms, bb.height + 0.5, mOut, bb.turnRate, pitchRate, minP, maxP) &&
-          Math.hypot(ms.ix - bb.x - bb.vx * ms.tHit, ms.iy - bb.y - bb.vy * ms.tHit) > (bb.mor.stats.splash_radius ?? mc.splash_radius ?? 7) + bb.radius + 2
-        ) {
-          wantYaw = ms.yaw
-          wantPitch = ms.pitch
-          gunOk = false
-          if (bb.mor.cooldown <= 0.05 && aimError(me.aim, ms.yaw, ms.pitch) < P.mortarAimTol) {
-            fire[bb.morSlot] = true
-            shootingNow = true
-          }
-        }
-      }
       if (gunOk) {
         fire[bb.gunSlot] = true
         shootingNow = true
@@ -393,18 +364,6 @@ export class Executor {
     const ux = (e.x - bb.x) / d, uy = (e.y - bb.y) / d
     const los = bb.los[e.id] === 1 || e.npc
     const R = it.range
-    if (it.style === STYLE_SPOT && los) {
-      // fight from a chosen point (peek spot): walk there while shooting, then hover around it
-      if (Math.hypot(it.gx - bb.x, it.gy - bb.y) > 1.6) {
-        this.gotoMove(it.gx, it.gy, it.gz, false, 0.8)
-        return
-      }
-      const side = this.jitter.step(bb.t, bb.rng, ux, uy, this.blockedFn)
-      this.mx = -uy * side * 0.6
-      this.my = ux * side * 0.6
-      if (this.blockedFn(this.mx * 2, this.my * 2)) this.mx = this.my = 0
-      return
-    }
     const hold = it.style === STYLE_HOLD || it.style === STYLE_PEEK
     if (!los) {
       // no shot line: reloading -> stay behind the wall; otherwise go and find the target

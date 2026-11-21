@@ -44,25 +44,12 @@ export const DEFAULTS = {
   duelLootDist: 32,
   /** SQUAD: with at least this HP fraction and nobody in sight, go and look for the next mech */
   seekHp: 0.6,
-  /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
-  seekSoundS: 0,
   /** SQUAD: reload before contact when the target is further than this and the mag is below reloadIdleFrac
    *  (999 = off: -0.5 against the league squad, it kept interrupting the approach fire) */
   reloadFarDist: 999,
   /** with several enemies in sight, orbit the target until it stands between us and the others; this is the
    *  angular tolerance (rad) inside which we stop orbiting and strafe randomly. 0 = off */
   shieldOrbit: 0.3,
-  /** several enemies in sight: fight from a nearby point (<= 14 m) where only the target has a line on us when
-   *  it beats staying put by this score margin (one exposed other ~ 40-60). 0 = off */
-  peekMargin: 0,
-  /** re-evaluate the peek spot every this many seconds */
-  peekEvery: 0.5,
-  /** SQUAD: an NPC drone shooting us from within this distance during a mech duel is killed first (when it is
-   *  closer than the mech, the mech is beyond 30 m, or the drone is nearly dead). 0 = off */
-  npcFirstDist: 0,
-  /** SQUAD: hold fire on a mech that has not noticed us (not aimed / shot at us, not hit by us, we are not
-   *  hurt) until it is this close. 0 = off */
-  ambushDist: 0,
   /** SQUAD opening: spin on the spot for this long (one turn = 1.9 s) to see all loot around before moving */
   openScanS: 1.9,
   /** kite style: preferred distance */
@@ -98,12 +85,6 @@ export const DEFAULTS = {
   laserMaxDist: 230,
   /** laser: target cylinder shrink for the release gate */
   laserShrink: 0.75,
-  /** fire a held mortar at mechs (1) or never (0); flat arc onto the feet, only between these distances */
-  mortarFire: 0,
-  mortarMinDist: 12,
-  mortarMaxDist: 90,
-  /** aim error (rad) under which the mortar trigger is pulled */
-  mortarAimTol: 0.04,
   /** reload out of combat when the magazine is below this fraction */
   reloadIdleFrac: 0.7,
   /** reload in combat without a shot line for this long when ammo is at most reloadLowAmmo */
@@ -178,8 +159,6 @@ export const DEFAULTS = {
   valDrop: 60,
   /** supply drop: no known enemy closer to the ring than this (SQUAD) */
   dropEnemyClear: 60,
-  /** SQUAD: with a mech in sight, go to a drop only when it lands within this many s more than our travel time */
-  dropFightLeadS: 99,
   /** supply drop: go when it lands within this many seconds more than our travel time */
   dropLeadS: 12,
 
@@ -222,7 +201,7 @@ export const DEFAULTS = {
   ffaLootEnemyClear: 130,
   // ---- FFA v2 (src/bot/strategies/ffa_v2.ts, owned by the FFA agent; plan: data/intel/ffa-plan.md)
   /** FFA strategy version: 1 = ffa_v1.ts (ghost v1), 2 = ffa_v2.ts (phased ghost) */
-  ffaVersion: 2,
+  ffaVersion: 1,
   /** pocket search: max straight-line travel (m) and margin kept inside the next circle */
   ffaSpotMaxDist: 150,
   ffaSpotMargin: 12,
@@ -243,7 +222,7 @@ export const DEFAULTS = {
   /** after breaking LOS: stay hidden (still, healing) this long */
   ffaHideS: 30,
   /** a sighting by a mech that is not aiming at us only counts within this distance */
-  ffaSeenDist: 100,
+  ffaSeenDist: 230,
   /** a visible mech with a line to us (could see us if it turned) inside this distance: step out of its line */
   ffaDuckDist: 160,
   /** third-party: a visible mech below this HP fraction inside ffaThirdDist while we are above ffaThirdHp */
@@ -254,7 +233,7 @@ export const DEFAULTS = {
   ffaPickupDist: 35,
   ffaPickupExpo: 0.2,
   /** end-game: alive at or below this -> hunt / third-party when HP fraction >= ffaEndHp */
-  ffaEndAlive: 2,
+  ffaEndAlive: 4,
   ffaEndHp: 0.85,
   /** end-game: walk toward the freshest fight until this far from it */
   ffaEndApproach: 110,
@@ -263,19 +242,7 @@ export const DEFAULTS = {
   /** after a hide: stay at the covered point when its static exposure is below this (0 = always re-pick a pocket) */
   ffaStayExpo: 0,
   /** nobody known near for 10 s: silent loot like v1 (bestLoot within ffaLootDist) - 0 off, 1 on */
-  ffaCalmLoot: 1,
-  /** break LOS to SOLID cover (segClear from eye and muzzle to knee/centre/top) with a committed point; 0 = cover.safeDirection (sight only) */
-  ffaStrictCover: 0,
-  /** keep a chosen break point this long while it stays covered */
-  ffaBreakCommitS: 3,
-  /** third-party / final duel fight style: 1 = hold position (STYLE_HOLD, shoot from where we are), 0 = duelIntent (push to range) */
-  ffaThirdHold: 0,
-  ffaFinalHold: 0,
-  /** opening weapon rush: take a laser / lightning within ffaRushDist (any exposure) during the first ffaRushS s while a slot is free */
-  ffaRushS: 0,
-  ffaRushDist: 70,
-  /** v2: seconds shot at without any covered point before we turn and fight (v1 uses ffaFleePatience) */
-  ffaBreakPatience: 8,
+  ffaCalmLoot: 0,
   /** known-enemy memory horizon for avoidance */
   enemyMemoryS: 20,
 

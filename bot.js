@@ -1904,8 +1904,6 @@ var S_LASER = 7;
 var S_LIGHTNING = 8;
 var S_JET = 9;
 var S_DEATH = 10;
-var S_CRATE = 11;
-var S_NPC_GUN = 12;
 var NK = SOUND_KINDS.length;
 var D_NEAR = 0;
 var D_MID = 1;
@@ -2500,7 +2498,6 @@ var PACE_BOOST = 2;
 var STYLE_PUSH = 0;
 var STYLE_HOLD = 1;
 var STYLE_PEEK = 3;
-var STYLE_SPOT = 4;
 var FACE_SCAN = 0;
 var FACE_THREATS = 1;
 var FACE_YAW = 2;
@@ -3049,11 +3046,6 @@ function slewTime(curYaw, curPitch, wantYaw, wantPitch, turnRate, pitchRate) {
   const tp = Math.abs(wantPitch - curPitch) / pitchRate;
   return ty > tp ? ty : tp;
 }
-function aimError(selfAim, wantYaw, wantPitch) {
-  const ey = wrapPi4(wantYaw - selfAim[0]) * Math.cos(wantPitch);
-  const ep = wantPitch - selfAim[1];
-  return Math.sqrt(ey * ey + ep * ep);
-}
 function newAimSolution() {
   return { yaw: 0, pitch: 0, tof: 0, tHit: 0, tFire: TICK, dist: 0, ix: 0, iy: 0, iz: 0, inRange: false };
 }
@@ -3202,69 +3194,6 @@ function rayHitsCylinder(ox, oy, oz, dx, dy, dz, cx, cy, cz, radius, height, max
 function aimHitsCylinder(sx, sy, sz, yaw, pitch, cx, cy, cz, radius, height, maxDist, muzzleHeight = 7, muzzleOut = 3) {
   const cyaw = Math.cos(yaw), syaw = Math.sin(yaw), cp = Math.cos(pitch);
   return rayHitsCylinder(sx + muzzleOut * cyaw, sy + muzzleOut * syaw, sz + muzzleHeight, cp * cyaw, cp * syaw, Math.sin(pitch), cx, cy, cz, radius, height, maxDist);
-}
-function newMortarSolution() {
-  return { yaw: 0, pitch: 0, tof: 0, apex: 0, tFire: TICK, tHit: 0, ix: 0, iy: 0, iz: 0, ok: false };
-}
-function mortarSolve(dx, dz, speed, gravity, high, minPitch = -0.7, maxPitch = 1.3) {
-  if (dx < 0.000001)
-    return NaN;
-  const v2 = speed * speed;
-  const disc = v2 * v2 - gravity * (gravity * dx * dx + 2 * dz * v2);
-  if (disc < 0)
-    return NaN;
-  const sq = Math.sqrt(disc);
-  const pitch = Math.atan2(high ? v2 + sq : v2 - sq, gravity * dx);
-  if (pitch < minPitch - 0.000000001 || pitch > maxPitch + 0.000000001)
-    return NaN;
-  return pitch;
-}
-function mortarTof(dx, pitch, speed) {
-  return dx / (speed * Math.cos(pitch));
-}
-function mortarApex(pitch, speed, gravity) {
-  const vz = speed * Math.sin(pitch);
-  return vz > 0 ? vz * vz / (2 * gravity) : 0;
-}
-function leadMortar(sx, sy, sz, svx, svy, aimYaw, aimPitch, tx, ty, tz, tvx, tvy, speed, gravity, high, cooldown, out, launchHeight = 9.5, muzzleOut = 3, turnRate = 4, pitchRate = 3, minPitch = -0.7, maxPitch = 1.3) {
-  let k = Math.ceil(cooldown / TICK - 0.000001);
-  if (k < 1)
-    k = 1;
-  let yaw = 0, pitch = NaN, tof = 0, ix = tx, iy = ty, tL = 0;
-  const dz = tz - (sz + launchHeight);
-  out.ok = false;
-  for (let outer = 0;outer < 5; outer++) {
-    const tFire = k * TICK;
-    tL = tFire - TICK;
-    const bx = sx + svx * tFire, by = sy + svy * tFire;
-    for (let i = 0;i < 10; i++) {
-      const tt = tL + tof;
-      ix = tx + tvx * tt;
-      iy = ty + tvy * tt;
-      const hx = ix - bx, hy = iy - by;
-      const h = Math.sqrt(hx * hx + hy * hy) - muzzleOut;
-      yaw = Math.atan2(hy, hx);
-      pitch = mortarSolve(h, dz, speed, gravity, high, minPitch, maxPitch);
-      if (pitch !== pitch)
-        return false;
-      tof = mortarTof(h, pitch, speed);
-    }
-    const ks = Math.ceil(slewTime(aimYaw, aimPitch, yaw, pitch, turnRate, pitchRate) / TICK - 0.000001);
-    if (ks <= k)
-      break;
-    k = ks;
-  }
-  out.yaw = yaw;
-  out.pitch = pitch;
-  out.tof = tof;
-  out.apex = mortarApex(pitch, speed, gravity);
-  out.tFire = k * TICK;
-  out.tHit = tL + tof;
-  out.ix = ix;
-  out.iy = iy;
-  out.iz = tz;
-  out.ok = true;
-  return true;
 }
 var LASER_IDLE = 0;
 var LASER_CHARGE = 1;
@@ -3732,9 +3661,6 @@ class Executor {
   threats = new ThreatList(48);
   dodge = newDodgeOut();
   sol = newAimSolution();
-  msol = newMortarSolution();
-  morReadyT = -1;
-  morSkipUntil = -1;
   a2 = { yaw: 0, pitch: 0 };
   slew = { yaw: 0, pitch: 0 };
   bearings = new Float64Array(8);
@@ -3889,28 +3815,6 @@ class Executor {
             }
           } else if (charge > 0)
             st.laserReleases++;
-        }
-      }
-      if (bb.mor && bb.mor.cooldown > 0.2)
-        this.morReadyT = -1;
-      if (bb.mor && bb.morSlot >= 0 && P.mortarFire > 0 && !tgt.npc && bb.mor.cooldown <= 0.2 && bb.t >= this.morSkipUntil && bb.los[tgt.id] === 1 && tgt.dist >= P.mortarMinDist && tgt.dist <= P.mortarMaxDist) {
-        if (this.morReadyT < 0)
-          this.morReadyT = bb.t;
-        if (bb.t - this.morReadyT > 0.6) {
-          this.morSkipUntil = bb.t + 1;
-          this.morReadyT = -1;
-        }
-        const mc = bb.cfg.weapons.mortar;
-        const ms = this.msol;
-        const minP = me.stats.min_pitch ?? -0.7, maxP = me.stats.max_pitch ?? 1.3;
-        if (leadMortar(bb.x, bb.y, bb.z, bb.vx, bb.vy, me.aim[0], me.aim[1], tgt.x, tgt.y, tgt.z, tgt.vx, tgt.vy, bb.mor.stats.speed ?? mc.speed ?? 72, mc.gravity ?? 22, false, bb.mor.cooldown, ms, bb.height + 0.5, mOut, bb.turnRate, pitchRate, minP, maxP) && Math.hypot(ms.ix - bb.x - bb.vx * ms.tHit, ms.iy - bb.y - bb.vy * ms.tHit) > (bb.mor.stats.splash_radius ?? mc.splash_radius ?? 7) + bb.radius + 2) {
-          wantYaw = ms.yaw;
-          wantPitch = ms.pitch;
-          gunOk = false;
-          if (bb.mor.cooldown <= 0.05 && aimError(me.aim, ms.yaw, ms.pitch) < P.mortarAimTol) {
-            fire[bb.morSlot] = true;
-            shootingNow = true;
-          }
         }
       }
       if (gunOk) {
@@ -4072,18 +3976,6 @@ class Executor {
     const ux = (e.x - bb.x) / d, uy = (e.y - bb.y) / d;
     const los = bb.los[e.id] === 1 || e.npc;
     const R = it.range;
-    if (it.style === STYLE_SPOT && los) {
-      if (Math.hypot(it.gx - bb.x, it.gy - bb.y) > 1.6) {
-        this.gotoMove(it.gx, it.gy, it.gz, false, 0.8);
-        return;
-      }
-      const side = this.jitter.step(bb.t, bb.rng, ux, uy, this.blockedFn);
-      this.mx = -uy * side * 0.6;
-      this.my = ux * side * 0.6;
-      if (this.blockedFn(this.mx * 2, this.my * 2))
-        this.mx = this.my = 0;
-      return;
-    }
     const hold = it.style === STYLE_HOLD || it.style === STYLE_PEEK;
     if (!los) {
       const g = bb.gun;
@@ -5912,58 +5804,6 @@ class Mover {
     }
     return out.ok;
   }
-  findPeek(bb, tgt, range, out) {
-    out.ok = false;
-    const w = this.world;
-    const tz = tgt.z + 0.5 * tgt.height;
-    const tz2 = tgt.z + 0.85 * tgt.height;
-    const eye = bb.muzzleH;
-    let here = 1e9;
-    let best = 1e9;
-    const base = bb.rng.next() * TAU6;
-    for (let ring = 0;ring < 4; ring++) {
-      const r = ring === 0 ? 0 : ring === 1 ? 5 : ring === 2 ? 9 : 14;
-      const nk = ring === 0 ? 1 : 12;
-      for (let k = 0;k < nk; k++) {
-        const a = base + k * TAU6 / nk;
-        const px = bb.x + r * Math.cos(a), py = bb.y + r * Math.sin(a);
-        let pz = bb.z;
-        if (r > 0) {
-          pz = this.standZ(bb, px, py, bb.z);
-          if (pz !== pz)
-            continue;
-          if (Math.abs(pz - bb.z) > 2.5)
-            continue;
-          if (bb.zone.margin(px, py) < 6)
-            continue;
-          if (!this.walkOk(bb, px, py))
-            continue;
-        }
-        if (!w.segClear(px, py, pz + eye, tgt.x, tgt.y, tz) && !w.segClear(px, py, pz + eye, tgt.x, tgt.y, tz2))
-          continue;
-        let s = r * 0.8 + Math.abs(Math.hypot(tgt.x - px, tgt.y - py) - range) * 0.25;
-        for (let i = 0;i < bb.nEn && s < best; i++) {
-          const e = bb.en[i];
-          if (e === tgt || e.dist > 150)
-            continue;
-          const ez = e.z + 8 / 9 * e.height;
-          if (w.segClear(e.x, e.y, ez, px, py, pz + 0.5 * bb.height) || w.segClear(e.x, e.y, ez, px, py, pz + bb.height))
-            s += 20 + 1500 / (e.dist + 30);
-        }
-        if (r === 0)
-          here = s;
-        if (s < best) {
-          best = s;
-          out.x = px;
-          out.y = py;
-          out.z = pz;
-          out.ok = true;
-          out.score = s;
-        }
-      }
-    }
-    return here;
-  }
   findHide(bb, cur, samples, out) {
     const P = bb.P;
     const w = this.world;
@@ -6076,13 +5916,8 @@ var DEFAULTS = {
   lightningKeepEnergy: 75,
   duelLootDist: 32,
   seekHp: 0.6,
-  seekSoundS: 0,
   reloadFarDist: 999,
   shieldOrbit: 0.3,
-  peekMargin: 0,
-  peekEvery: 0.5,
-  npcFirstDist: 0,
-  ambushDist: 0,
   openScanS: 1.9,
   rangeKite: 14,
   rangeBand: 5,
@@ -6100,10 +5935,6 @@ var DEFAULTS = {
   lightningRangeFrac: 0.97,
   laserMaxDist: 230,
   laserShrink: 0.75,
-  mortarFire: 0,
-  mortarMinDist: 12,
-  mortarMaxDist: 90,
-  mortarAimTol: 0.04,
   reloadIdleFrac: 0.7,
   reloadNoLosS: 0.6,
   reloadLowAmmo: 5,
@@ -6141,7 +5972,6 @@ var DEFAULTS = {
   lootSwitchMargin: 4,
   valDrop: 60,
   dropEnemyClear: 60,
-  dropFightLeadS: 99,
   dropLeadS: 12,
   zoneMargin: 18,
   zoneSlackS: 10,
@@ -6160,7 +5990,7 @@ var DEFAULTS = {
   ffaQuietUntil: 9999,
   ffaLootDist: 90,
   ffaLootEnemyClear: 130,
-  ffaVersion: 2,
+  ffaVersion: 1,
   ffaSpotMaxDist: 150,
   ffaSpotMargin: 12,
   ffaSpotTopK: 6,
@@ -6172,26 +6002,19 @@ var DEFAULTS = {
   ffaCloseBreak: 14,
   ffaReturnFireDist: 60,
   ffaHideS: 30,
-  ffaSeenDist: 100,
+  ffaSeenDist: 230,
   ffaDuckDist: 160,
   ffaThirdHp: 0.6,
   ffaThirdTargetHp: 0.35,
   ffaThirdDist: 120,
   ffaPickupDist: 35,
   ffaPickupExpo: 0.2,
-  ffaEndAlive: 2,
+  ffaEndAlive: 4,
   ffaEndHp: 0.85,
   ffaEndApproach: 110,
   ffaEndHunt: 1,
   ffaStayExpo: 0,
-  ffaCalmLoot: 1,
-  ffaStrictCover: 0,
-  ffaBreakCommitS: 3,
-  ffaThirdHold: 0,
-  ffaFinalHold: 0,
-  ffaRushS: 0,
-  ffaRushDist: 70,
-  ffaBreakPatience: 8,
+  ffaCalmLoot: 0,
   enemyMemoryS: 20,
   replanGoalDist: 6,
   replanTicks: 40,
@@ -6261,8 +6084,6 @@ function ourDps(bb, e, dist) {
       d *= 1 + (la.stats.cookoff ?? 0.6);
     dps += d;
   }
-  if (bb.mor && P.mortarFire > 0 && dist >= P.mortarMinDist && dist <= P.mortarMaxDist)
-    dps += (bb.mor.stats.damage ?? 200) * 0.6 / (bb.mor.stats.cooldown ?? 2.6);
   return dps * bb.dmgMult;
 }
 function theirDps(bb, e, dist) {
@@ -6600,43 +6421,6 @@ class SquadScratch {
   spot2 = newSpot();
   one = [];
   phantom = new Track(50);
-  sndX = 0;
-  sndY = 0;
-  peek = newSpot();
-  peekT = -1e9;
-  peekOk = false;
-}
-function travelPace(bb, x, y) {
-  if (bb.nEn > 0 || bb.energy < bb.P.boostMinEnergy)
-    return PACE_WALK;
-  return Math.hypot(x - bb.x, y - bb.y) > bb.P.boostTravelDist ? PACE_BOOST : PACE_WALK;
-}
-var MECH_SOUND = new Uint8Array(16);
-for (const k of [S_GUN, S_MORTAR, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_CRATE, S_NPC_GUN, S_STEP, S_BOOST, S_JET, S_RELOAD])
-  MECH_SOUND[k] = 1;
-function soundLead(bb, sc) {
-  const s = bb.sounds;
-  const cap = s.evKind.length;
-  let bs = 1e9;
-  for (let k = 0;k < s.evCount; k++) {
-    const i = (s.evHead - 1 - k + cap) % cap;
-    const age = bb.t - s.evT[i];
-    if (age > bb.P.seekSoundS || age < -1)
-      continue;
-    if (MECH_SOUND[s.evKind[i]] !== 1)
-      continue;
-    const x = s.evX[i], y = s.evY[i];
-    const d = Math.hypot(x - bb.x, y - bb.y);
-    if (d < 20 || bb.zone.margin(x, y) < 10)
-      continue;
-    const sc2 = age + d / 12;
-    if (sc2 < bs) {
-      bs = sc2;
-      sc.sndX = x;
-      sc.sndY = y;
-    }
-  }
-  return bs < 1e9;
 }
 function duelIntent(bb, mv, sc, it, target, allowDisengage) {
   const P = bb.P;
@@ -6701,23 +6485,7 @@ function duelIntent(bb, mv, sc, it, target, allowDisengage) {
       return;
     }
   }
-  const range = duelRange(bb, target);
-  if (P.peekMargin > 0 && !target.npc && bb.nEn > 1) {
-    if (bb.t - sc.peekT > P.peekEvery) {
-      sc.peekT = bb.t;
-      const here = mv.findPeek(bb, target, range, sc.peek);
-      sc.peekOk = sc.peek.ok && sc.peek.score + P.peekMargin < here;
-    }
-    if (sc.peekOk) {
-      it.fight(target.id, STYLE_SPOT, range, "peek");
-      it.gx = sc.peek.x;
-      it.gy = sc.peek.y;
-      it.gz = sc.peek.z;
-      return;
-    }
-  } else
-    sc.peekOk = false;
-  it.fight(target.id, STYLE_PUSH, range, "duel");
+  it.fight(target.id, STYLE_PUSH, duelRange(bb, target), "duel");
 }
 function underFire(bb, mv, sc, it) {
   const m = bb.mem;
@@ -6772,8 +6540,7 @@ function decideSquad(bb, mv, sc) {
   if (di >= 0) {
     const d = bb.drops[di];
     const dist = Math.hypot(d.pos[0] - bb.x, d.pos[1] - bb.y);
-    const soonEnough = !target || d.lands_in <= dist / bb.walk * 1.3 + P.dropFightLeadS;
-    if (soonEnough && (!target || bb.nThreats === 0 || dist < 35 || bb.hpFrac < 0.75 && dist < 150)) {
+    if (!target || bb.nThreats === 0 || dist < 35 || bb.hpFrac < 0.75 && dist < 150) {
       it.capture(d.pos[0], d.pos[1], d.pos[2], target || dist < 40 ? PACE_WALK : PACE_BOOST, "drop");
       it.face = FACE_THREATS;
       if (target)
@@ -6792,17 +6559,7 @@ function decideSquad(bb, mv, sc) {
       weaponReflex(bb, it);
       return it;
     }
-    const npc = bb.npcAggressor;
-    if (npc && P.npcFirstDist > 0 && npc.dist < P.npcFirstDist && (npc.dist < target.dist || target.dist > 30 || npc.hp >= 0 && npc.hp < 150)) {
-      it.fight(npc.id, STYLE_PUSH, Math.min(26, npc.dist), "npc1");
-      weaponReflex(bb, it);
-      return it;
-    }
     duelIntent(bb, mv, sc, it, target, true);
-    if (P.ambushDist > 0 && it.label === "duel" && target.dist > P.ambushDist && bb.t - target.tShotAtUs > 4 && bb.t - target.tAimedAtUs > 1.5 && bb.t - target.tHitByUs > 4 && bb.t - bb.tHurt > 3) {
-      it.weaponsFree = false;
-      it.label = "stalk";
-    }
     weaponReflex(bb, it);
     return it;
   }
@@ -6850,15 +6607,8 @@ function decideSquad(bb, mv, sc) {
         lead = e;
     }
     if (lead) {
-      it.goto(lead.x, lead.y, lead.z, travelPace(bb, lead.x, lead.y), "seek");
+      it.goto(lead.x, lead.y, lead.z, PACE_WALK, "seek");
       it.arrive = 6;
-      it.allowJet = false;
-      weaponReflex(bb, it);
-      return it;
-    }
-    if (P.seekSoundS > 0 && soundLead(bb, sc)) {
-      it.goto(sc.sndX, sc.sndY, bb.world ? bb.world.groundZ(sc.sndX, sc.sndY) : bb.z, travelPace(bb, sc.sndX, sc.sndY), "hear");
-      it.arrive = 10;
       it.allowJet = false;
       weaponReflex(bb, it);
       return it;
@@ -6871,7 +6621,7 @@ function decideSquad(bb, mv, sc) {
     m.n1 = bb.zone.ncy + r * Math.sin(a);
     m.n2 = bb.t + 25;
   }
-  it.goto(m.n0, m.n1, bb.world ? bb.world.groundZ(m.n0, m.n1) : bb.z, travelPace(bb, m.n0, m.n1), "explore");
+  it.goto(m.n0, m.n1, bb.world ? bb.world.groundZ(m.n0, m.n1) : bb.z, PACE_WALK, "explore");
   it.arrive = 6;
   it.allowJet = false;
   weaponReflex(bb, it);
@@ -8035,104 +7785,6 @@ function coverOf(bb, mv, st) {
   }
   return st.cover;
 }
-var RINGS2 = [4, 7, 10, 14, 19, 25, 32, 40, 52];
-var NDIR2 = 16;
-function hiddenAt(bb, st, n, x, y, z) {
-  const w = bb.world;
-  if (!w)
-    return false;
-  const h = bb.height;
-  for (let i = 0;i < n; i++) {
-    const v = st.views[i];
-    const ez = v.z + 8 * (1 + 0.05 * (v.cubes ?? 0));
-    const mz = v.z + 6.5;
-    if (w.segClear(v.x, v.y, ez, x, y, z + h - 0.3) || w.segClear(v.x, v.y, ez, x, y, z + 0.5 * h) || w.segClear(v.x, v.y, mz, x, y, z + 0.5 * h) || w.segClear(v.x, v.y, mz, x, y, z + 1.5))
-      return false;
-  }
-  return true;
-}
-function breakPoint(bb, mv, st, n, maxDist) {
-  const zn = bb.zone;
-  let best = 1e9;
-  let ok = false;
-  for (let r = 0;r < RINGS2.length; r++) {
-    const len = RINGS2[r];
-    if (len > maxDist || len > best)
-      break;
-    for (let k = 0;k < NDIR2; k++) {
-      const a = (k + 0.5 * (r & 1)) * 2 * Math.PI / NDIR2;
-      const ux = Math.cos(a), uy = Math.sin(a);
-      const px = bb.x + ux * len, py = bb.y + uy * len;
-      let toward = 0;
-      for (let i = 0;i < n; i++) {
-        const v = st.views[i];
-        const dx = v.x - bb.x, dy = v.y - bb.y;
-        const d = Math.hypot(dx, dy) || 1;
-        const dot = (dx * ux + dy * uy) / d;
-        if (dot > toward)
-          toward = dot;
-      }
-      const score = len + 12 * toward;
-      if (score >= best)
-        continue;
-      if (zn.margin(px, py) < 5)
-        continue;
-      const pz = mv.standZ(bb, px, py, bb.z);
-      if (pz !== pz || Math.abs(pz - bb.z) > 3)
-        continue;
-      if (!mv.walkOk(bb, px, py))
-        continue;
-      if (!hiddenAt(bb, st, n, px, py, pz))
-        continue;
-      best = score;
-      ok = true;
-      st.brkX = px;
-      st.brkY = py;
-      st.brkZ = pz;
-    }
-  }
-  const nav = mv.nav;
-  if (!ok && nav) {
-    const q = st.q;
-    q.radius = bb.radius;
-    q.height = bb.height;
-    q.energy = bb.maxEnergy;
-    q.maxExpansions = 3000;
-    let tries = 0;
-    for (let r = 1;r < RINGS2.length && !ok && tries < 6; r++) {
-      const len = RINGS2[r];
-      if (len > maxDist)
-        break;
-      for (let k = 0;k < NDIR2 && tries < 6; k++) {
-        const a = (k + 0.25) * 2 * Math.PI / NDIR2;
-        const px = bb.x + Math.cos(a) * len, py = bb.y + Math.sin(a) * len;
-        if (zn.margin(px, py) < 5)
-          continue;
-        const pz = mv.standZ(bb, px, py, bb.z);
-        if (pz !== pz || Math.abs(pz - bb.z) > 3)
-          continue;
-        if (!hiddenAt(bb, st, n, px, py, pz))
-          continue;
-        tries++;
-        const p = nav.plan(bb.x, bb.y, bb.z, px, py, pz, q, st.path ?? undefined);
-        if (!p)
-          continue;
-        st.path = p;
-        if (!p.complete || p.cost * bb.walk > 1.8 * len + 10)
-          continue;
-        ok = true;
-        st.brkX = px;
-        st.brkY = py;
-        st.brkZ = pz;
-        break;
-      }
-    }
-    q.maxExpansions = 20000;
-  }
-  st.brkOk = ok;
-  st.brkT = bb.t;
-  return ok;
-}
 function knownNear(bb, dist, maxAge) {
   const tr = bb.tracker.mechs;
   for (let i = 0;i < tr.length; i++) {
@@ -8341,22 +7993,11 @@ function decideFfaV2(bb, mv, sc) {
     const cover = coverOf(bb, mv, st);
     const tgt = shooter ?? found;
     const ss = st.ss;
-    const strict = P.ffaStrictCover > 0;
-    const hiddenNow = strict && hiddenAt(bb, st, nv, bb.x, bb.y, bb.z);
-    if (strict) {
-      const keep = st.brkOk && bb.t - st.brkT < P.ffaBreakCommitS && hiddenAt(bb, st, nv, st.brkX, st.brkY, st.brkZ);
-      if (!keep && (bb.t - st.brkT >= 0.3 || !st.brkOk))
-        breakPoint(bb, mv, st, nv, P.ffaBreakMaxDist);
-      ss.found = st.brkOk || hiddenNow;
-      ss.x = st.brkOk ? st.brkX : bb.x;
-      ss.y = st.brkOk ? st.brkY : bb.y;
-      ss.z = st.brkOk ? st.brkZ : bb.z;
-      ss.dist = hiddenNow ? 0 : st.brkOk ? Math.hypot(st.brkX - bb.x, st.brkY - bb.y) : 0;
-    } else if (cover)
+    if (cover)
       cover.safeDirection(bb.x, bb.y, bb.z, bb.height, st.views, nv, P.ffaBreakMaxDist, ss);
     else
       ss.found = false;
-    if (!strict && ss.found && zn.margin(ss.x, ss.y) < 4)
+    if (ss.found && zn.margin(ss.x, ss.y) < 4)
       ss.found = false;
     if (!ss.found && st.stuckSince < 0)
       st.stuckSince = bb.t;
@@ -8365,7 +8006,7 @@ function decideFfaV2(bb, mv, sc) {
       const close = tgt.dist < P.ffaCloseDist && (!ss.found || ss.dist > P.ffaCloseBreak);
       const finishing = tHp < P.ffaFinishHp && bb.hpFrac > 0.45 && nFound <= 1;
       const winning = fightRatio(bb, tgt) > P.ffaFightRatio;
-      const patience = !ss.found && st.stuckSince >= 0 && bb.t - st.stuckSince > P.ffaBreakPatience && bb.t - bb.tHurt < 1.5;
+      const patience = !ss.found && st.stuckSince >= 0 && bb.t - st.stuckSince > P.ffaFleePatience && bb.t - bb.tHurt < 1.5;
       const endFight = hunt && nFound <= 1 && fightRatio(bb, tgt) > 0.8 || bb.obs.alive <= P.ffaDuelAlive;
       if (close && (shooter !== null || tgt.dist < 25) || finishing || winning || patience && tgt.dist < 110 || endFight) {
         duelIntent(bb, mv, sc, it, tgt, true);
@@ -8381,12 +8022,7 @@ function decideFfaV2(bb, mv, sc) {
     st.spotOk = false;
     const danger = shooter !== null || unseenHit || found !== null && found.dist < 100;
     const pace = danger && bb.energy > 20 ? PACE_BOOST : PACE_WALK;
-    if (hiddenNow) {
-      it.hold(bb.x, bb.y, bb.z, "covered");
-    } else if (strict && ss.found) {
-      it.flee(ss.x, ss.y, ss.z, pace, "break");
-      it.arrive = 1;
-    } else if (ss.found) {
+    if (ss.found) {
       st.brkOk = true;
       st.brkX = ss.x;
       st.brkY = ss.y;
@@ -8437,13 +8073,8 @@ function decideFfaV2(bb, mv, sc) {
         best = e;
     }
     if (best) {
-      const final = bb.obs.alive <= P.ffaDuelAlive;
-      if ((final ? P.ffaFinalHold : P.ffaThirdHold) > 0)
-        it.fight(best.id, STYLE_HOLD, best.dist, final ? "final" : "third");
-      else {
-        duelIntent(bb, mv, sc, it, best, true);
-        it.label = hunt ? "hunt" : final ? "final" : "third";
-      }
+      duelIntent(bb, mv, sc, it, best, true);
+      it.label = hunt ? "hunt" : "third";
       weaponReflex(bb, it);
       return it;
     }
@@ -8462,11 +8093,7 @@ function decideFfaV2(bb, mv, sc) {
     if (near) {
       const cover = coverOf(bb, mv, st);
       const ss = st.ss;
-      if (P.ffaStrictCover > 0) {
-        const keep = st.brkOk && bb.t - st.brkT < P.ffaBreakCommitS && hiddenAt(bb, st, nv, st.brkX, st.brkY, st.brkZ);
-        if (!keep && bb.t - st.brkT >= 0.3)
-          breakPoint(bb, mv, st, nv, P.ffaBreakMaxDist);
-      } else if (cover && bb.t - st.brkT > 0.5) {
+      if (cover && bb.t - st.brkT > 0.5) {
         cover.safeDirection(bb.x, bb.y, bb.z, bb.height, st.views, nv, P.ffaBreakMaxDist, ss);
         if (ss.found && zn.margin(ss.x, ss.y) >= 4) {
           st.brkOk = true;
@@ -8546,20 +8173,17 @@ function decideFfaV2(bb, mv, sc) {
     const items = bb.loot.items;
     let bi = -1;
     let bs = 0;
-    const rush = bb.t < P.ffaRushS && bb.freeSlot >= 0;
     for (let i = 0;i < items.length; i++) {
       const p = items[i];
       if (p.type !== L_PICKUP && p.type !== L_CUBE)
         continue;
       const d = Math.hypot(p.x - bb.x, p.y - bb.y);
-      const weapon = p.type === L_PICKUP && (p.wk === W_LASER || p.wk === W_LIGHTNING);
-      const rushIt = rush && weapon && d <= P.ffaRushDist;
-      if (d > P.ffaPickupDist && !rushIt || Math.abs(p.z - bb.z) > 4)
+      if (d > P.ffaPickupDist || Math.abs(p.z - bb.z) > 4)
         continue;
-      const v = p.type === L_CUBE ? P.valCube : weapon ? pickupValue(bb, p.wk) : 0;
+      const v = p.type === L_CUBE ? P.valCube : p.wk === W_LASER || p.wk === W_LIGHTNING ? pickupValue(bb, p.wk) : 0;
       if (v <= 0)
         continue;
-      if (!rushIt && cover.exposureAt(p.x, p.y, p.z) > P.ffaPickupExpo)
+      if (cover.exposureAt(p.x, p.y, p.z) > P.ffaPickupExpo)
         continue;
       if (zn.marginAt(p.x, p.y, bb.t + d / bb.walk + 3) < 8)
         continue;
