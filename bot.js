@@ -8373,5 +8373,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/main.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup });
+// src/entries/main-r9.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { rangeGun: 9, rangeKite: 9, rangeVsLightning: 9, rangeLaserVsMortar: 9 } });
