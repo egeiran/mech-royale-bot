@@ -7,7 +7,7 @@ import type { Offer } from "../../protocol/mechfight.ts"
 import type { Track } from "../perception/tracker.ts"
 import { W_GUN, W_LASER, W_LIGHTNING, W_MORTAR } from "../perception/tracker.ts"
 import { hitProbGun } from "../tactics/aim.ts"
-import { L_CRATE, L_CUBE, L_PICKUP, type Blackboard, type LootItem } from "../brain/blackboard.ts"
+import { L_CRATE, L_CUBE, L_PICKUP, MODE_SQUAD, type Blackboard, type LootItem } from "../brain/blackboard.ts"
 import { FACE_THREATS, PACE_BOOST, PACE_WALK, type Intent } from "../brain/intent.ts"
 
 // ---------------------------------------------------------------- damage race
@@ -31,6 +31,7 @@ export function ourDps(bb: Blackboard, e: Track, dist: number): number {
     if (e.weapons & W_MORTAR) d *= 1 + (la.stats.cookoff ?? 0.6)
     dps += d
   }
+  if (bb.mor && P.mortarFire > 0 && dist >= P.mortarMinDist && dist <= P.mortarMaxDist) dps += ((bb.mor.stats.damage ?? 200) * 0.6) / (bb.mor.stats.cooldown ?? 2.6)
   return dps * bb.dmgMult
 }
 
@@ -105,6 +106,8 @@ export function pickTarget(bb: Blackboard): Track | null {
   for (let i = 0; i < bb.nEn; i++) {
     const e = bb.en[i]
     let s = Math.min(40, timeToKill(bb, e)) + e.dist / 30
+    // kill order: the mechs that hurt us most go first (damage race against several)
+    if (bb.P.targetDpsW > 0 && bb.los[e.id] === 1) s -= (bb.P.targetDpsW * theirDps(bb, e, e.dist)) / 100
     if (bb.los[e.id] !== 1) s += 6
     if (e.aimingAtUs) s -= 1.5
     if (bb.t - e.tShotAtUs < 3) s -= 1.5
@@ -184,6 +187,16 @@ export function swapSlot(bb: Blackboard, wk: number): number {
   return -1
 }
 
+/** utility lost per second of travel to loot (SQUAD has its own value: kill tempo vs cubes) */
+export function lootTc(bb: Blackboard): number {
+  return bb.mode === MODE_SQUAD && bb.P.squadLootTimeCost >= 0 ? bb.P.squadLootTimeCost : bb.P.lootTimeCost
+}
+
+/** SQUAD mode: HP fraction below which we count as hurt (heal before seeking, regen exit) */
+export function healUntil(bb: Blackboard): number {
+  return bb.mode === MODE_SQUAD && bb.P.squadHealUntil >= 0 ? bb.P.squadHealUntil : bb.P.squadRegenUntil
+}
+
 /**
  * Best loot goal by utility = value - time cost. `silentOnly` skips everything that needs shooting (crates,
  * NPCs); `maxDist` bounds the search. Hysteresis through mem.lootId.
@@ -196,6 +209,7 @@ export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, o
   out.npc = null
   out.score = 0
   let best = 0
+  const tc = lootTc(bb)
   const cap = (bb.cfg.cubes.stat_cap as number) ?? 10
   const cubeMult = bb.cubes >= cap ? P.cubeOverCapMult : 1
   const items = bb.loot.items
@@ -222,7 +236,7 @@ export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, o
     const eta = (d / bb.walk) * 1.25 + extra
     const mz = zn.marginAt(it.x, it.y, bb.t + eta + 2)
     if (mz < 6) continue
-    let s = val - P.lootTimeCost * eta
+    let s = val - tc * eta
     const mNext = zn.marginNext(it.x, it.y)
     if (mNext < 0 && zn.t0 - bb.t < 40) s += P.lootZoneCost * Math.max(-60, mNext) * 0.2
     if (it.id === m.lootId) s += P.lootSwitchMargin
@@ -242,7 +256,7 @@ export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, o
       if (d > maxDist) continue
       const eta = (Math.max(0, d - 30) / bb.walk) * 1.25 + 3.5
       if (zn.marginAt(n.x, n.y, bb.t + eta + 3) < 10) continue
-      let s = P.valNpc * cubeMult - P.lootTimeCost * eta
+      let s = P.valNpc * cubeMult - tc * eta
       if (n.id === m.lootId) s += P.lootSwitchMargin
       if (s > best) {
         best = s
@@ -329,7 +343,7 @@ export function wantDrop(bb: Blackboard, enemyClear: number): number {
       }
       if (near) continue
     }
-    const s = P.valDrop * (0.4 + 0.6 * (1 - bb.hpFrac) + 0.3) - P.lootTimeCost * Math.max(eta, d.lands_in)
+    const s = P.valDrop * (0.4 + 0.6 * (1 - bb.hpFrac) + 0.3) - lootTc(bb) * Math.max(eta, d.lands_in)
     if (s > bs) {
       bs = s
       best = i

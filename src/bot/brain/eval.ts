@@ -188,6 +188,7 @@ function runSet(label: string, ours: ((seed: number) => { factory: BotFactory; p
   let sumScore = 0, sumKills = 0, sumT = 0, errs = 0, stuck = 0, slow = 0, dec = 0, oppErrs = 0, wins = 0
   let nLtg = 0, sumLtgT = 0, nLas = 0, sumCubes = 0
   const causes = new Map<string, number>()
+  const allLabels = new Map<string, number>()
   const allMs: number[] = []
   const scores: number[] = []
   const t00 = performance.now()
@@ -215,6 +216,7 @@ function runSet(label: string, ours: ((seed: number) => { factory: BotFactory; p
       if (probe.ltgT >= 0) ((nLtg++), (sumLtgT += probe.ltgT))
       if (probe.lasT >= 0) nLas++
       sumCubes += probe.maxCubes
+      for (const [l, n] of probe.labels) allLabels.set(l, (allLabels.get(l) ?? 0) + n)
       const st = probe.brain!.exec.stats
       stuck += st.stuckEpisodes
       slow += st.slow
@@ -233,6 +235,9 @@ function runSet(label: string, ours: ((seed: number) => { factory: BotFactory; p
   const pct = (q: number) => (allMs.length ? allMs[Math.min(allMs.length - 1, Math.floor(q * allMs.length))]!.toFixed(2) : "-")
   console.log(`== ${label}: mean score ${mean.toFixed(2)} +- ${(sd / Math.sqrt(nSeeds)).toFixed(2)} (n=${nSeeds}) wins ${wins} kills ${(sumKills / nSeeds).toFixed(2)} survive ${(sumT / nSeeds).toFixed(0)} s | exceptions ${errs} (opp ${oppErrs}) | stuck episodes ${stuck}, slow decisions ${slow}/${dec} | ms p50 ${pct(0.5)} p99 ${pct(0.99)} max ${pct(1)} | ${((performance.now() - t00) / nSeeds).toFixed(0)} ms/match`)
   console.log(`   loadout: lightning in ${nLtg}/${nSeeds} (mean t=${(sumLtgT / Math.max(1, nLtg)).toFixed(0)} s), laser in ${nLas}/${nSeeds}, max cubes mean ${(sumCubes / nSeeds).toFixed(1)}`)
+  let nLab = 0
+  for (const v of allLabels.values()) nLab += v
+  console.log(`   time share by intent: ${[...allLabels].sort((a, b) => b[1] - a[1]).map(([l, n]) => `${l} ${((100 * n) / Math.max(1, nLab)).toFixed(0)}%`).join(" ")} (${(nLab / 10 / nSeeds).toFixed(0)} s/match)`)
   console.log(`   causes: ${[...causes].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c}=${n}`).join(" ")}`)
   return { mean }
 }
