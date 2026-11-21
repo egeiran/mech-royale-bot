@@ -57,6 +57,11 @@ export class Executor {
   private unstickUntil = -1
   private unstickYaw = 0
   private unstickN = 0
+  /** last hop-out spot / time and how many hops in a row happened there (nav watchdog) */
+  private unstickX = 1e9
+  private unstickY = 1e9
+  private unstickT = -1e9
+  private unstickRep = 0
   private mx = 0
   private my = 0
   private jump = false
@@ -112,6 +117,12 @@ export class Executor {
       else if (it.kind === K_HOLD && this.mv.arrived) this.mx = this.my = 0
       if (it.pace === PACE_SILENT && !this.boost && bb.grounded) speedScale = Math.min(1, P.silentSpeed / bb.walk)
       else if (it.pace === PACE_BOOST && bb.grounded && !this.mv.noBoost && bb.energy > 12 && this.mv.dist > 10 && (this.mx !== 0 || this.my !== 0)) this.boost = true
+    }
+    // opening jet scan: straight up, no horizontal move (the strategy decides when to stop)
+    if (it.jetUp) {
+      this.mx = this.my = 0
+      this.jump = bb.grounded
+      this.boost = !bb.grounded
     }
 
     // ---- reflex: never stand still while being shot
@@ -340,6 +351,12 @@ export class Executor {
     // direction each time (sideways, the other side, backwards), jetting while in the air
     if (this.slowRun >= 12 && bb.t >= this.unstickUntil) {
       this.unstickN++
+      // watchdog: repeated hops at the same spot only jump (no jets): never burn energy in a hop loop
+      if (Math.hypot(bb.x - this.unstickX, bb.y - this.unstickY) < 6 && bb.t - this.unstickT < 20) this.unstickRep++
+      else this.unstickRep = 0
+      this.unstickX = bb.x
+      this.unstickY = bb.y
+      this.unstickT = bb.t
       const base = Math.atan2(this.my, this.mx)
       const turn = this.unstickN % 4 === 1 ? 0 : this.unstickN % 4 === 2 ? 1.4 : this.unstickN % 4 === 3 ? -1.4 : Math.PI
       this.unstickYaw = base + turn
@@ -351,7 +368,7 @@ export class Executor {
       this.my = Math.sin(this.unstickYaw)
       speedScale = 1
       if (bb.grounded) this.jump = true
-      else if (bb.energy > 8) this.boost = bb.t < this.unstickUntil - 0.4
+      else if (bb.energy > 8 && !(P.navWatchdogS > 0 && this.unstickRep >= 2)) this.boost = bb.t < this.unstickUntil - 0.4
     }
 
     // ---- output

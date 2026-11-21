@@ -101,6 +101,21 @@ export class Mover {
   /** counters for the eval */
   plans = 0
   stuckEvents = 0
+  /** nav watchdog (P.navWatchdogS): goal / best distance / anchor of the current no-progress window */
+  private wdGX = 1e9
+  private wdGY = 1e9
+  private wdBest = 1e9
+  private wdT = 0
+  private wdX = 0
+  private wdY = 0
+  /** body scale added after a watchdog trip (plan as a bigger mech: an unknown size mismatch), decays */
+  private inflate = 1
+  private inflateT = -1e9
+  /** no jets in plans until this time (replan on foot) */
+  noJetUntil = -1e9
+  /** watchdog trips this match / on the current goal */
+  watchdogTrips = 0
+  private wdGoalTrips = 0
 
   constructor(world: World, mech?: Config["mech"]) {
     this.world = world
@@ -188,6 +203,39 @@ export class Mover {
       return
     }
     const nav = this.nav
+    // watchdog: no progress toward the same goal for navWatchdogS s while staying within 8 m of one spot = a
+    // loop (jet / hop / bump at the same obstacle). Plan as a bigger body, on foot, and give the goal up.
+    let wdTrip = false
+    if (P.navWatchdogS > 0) {
+      if (Math.hypot(gx - this.wdGX, gy - this.wdGY) > 12) {
+        this.wdGoalTrips = 0
+        this.wdGX = gx
+        this.wdGY = gy
+        this.wdBest = d
+        this.wdT = bb.t
+        this.wdX = bb.x
+        this.wdY = bb.y
+      } else if (d < this.wdBest - 2 || Math.hypot(bb.x - this.wdX, bb.y - this.wdY) > 8) {
+        this.wdBest = Math.min(d, this.wdBest)
+        this.wdT = bb.t
+        this.wdX = bb.x
+        this.wdY = bb.y
+      } else if (bb.t - this.wdT > P.navWatchdogS) {
+        wdTrip = true
+        this.watchdogTrips++
+        // second trip on this goal: give it up for the match (strategies skip it; on foot only from now on)
+        if (++this.wdGoalTrips >= 2) bb.addBadGoal(gx, gy)
+        this.inflate = Math.min(1.35, this.inflate + 0.15)
+        this.inflateT = bb.t
+        this.noJetUntil = bb.t + 12
+        this.unreachable = true
+        this.wdT = bb.t
+        this.wdBest = d
+        this.stuckFor = 1
+      }
+      if (this.inflate > 1 && bb.t - this.inflateT > 40) this.inflate = 1
+    }
+    if (bb.t < this.noJetUntil || (P.navWatchdogS > 0 && bb.nBadGoals > 0 && bb.isBadGoal(gx, gy))) allowJet = false
     if (nav && this.follower) {
       const moved = Math.hypot(gx - this.goalX, gy - this.goalY) + Math.abs(gz - this.goalZ)
       const interrupted = bb.tick - this.lastGotoTick > (bb.cfg.match.decide_every ?? 2) * 2
@@ -196,8 +244,8 @@ export class Mover {
       if (need && this.plannedTick !== bb.tick && (bb.grounded || !this.havePath)) {
         this.plannedTick = bb.tick
         const q = this.q
-        q.radius = bb.radius
-        q.height = bb.height
+        q.radius = bb.radius * this.inflate
+        q.height = bb.height * this.inflate
         q.allowJet = allowJet
         q.energy = Math.max(bb.energy, bb.maxEnergy * 0.95)
         // budget grows with the distance: a nearby goal that needs a huge search is unreachable anyway
@@ -209,7 +257,7 @@ export class Mover {
         if (p) {
           this.path = p
           this.havePath = true
-          this.unreachable = !p.complete
+          this.unreachable = !p.complete || wdTrip
         } else {
           this.havePath = false
           this.unreachable = false

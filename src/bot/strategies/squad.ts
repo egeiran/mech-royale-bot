@@ -45,6 +45,8 @@ export class SquadScratch {
   readonly peek = newSpot()
   peekT = -1e9
   peekOk = false
+  /** opening jet scan: 0 not started, 1 climbing, 2 falling (still scanning), 3 done */
+  js = 0
 }
 
 /** boost on long trips with nobody in sight (tempo) while energy is plentiful */
@@ -71,6 +73,47 @@ function bestWeapon(bb: Blackboard, maxDist: number, sc: SquadScratch, wk: numbe
     }
   }
   return sc.wpn !== null
+}
+
+/**
+ * laser rush target: the nearest remembered laser pickup within maxDist (roof items only when `roof` and the climb
+ * is < 40 m), inside the zone, with fewer than laserRushCrowd visible mechs (besides `target`) within 60 m of it;
+ * into sc.wpn
+ */
+function rushLaser(bb: Blackboard, maxDist: number, sc: SquadScratch, roof: boolean, target: Track | null): boolean {
+  const items = bb.loot.items
+  let bd = maxDist
+  sc.wpn = null
+  if (pickupValue(bb, W_LASER) <= 0) return false
+  for (let i = 0; i < items.length; i++) {
+    const p = items[i]
+    if (p.type !== L_PICKUP || p.wk !== W_LASER || p.badUntil > bb.t) continue
+    const climb = p.z - bb.z
+    if (climb > (roof ? 40 : 3)) continue
+    const d = Math.hypot(p.x - bb.x, p.y - bb.y)
+    if (d >= bd || bb.zone.marginAt(p.x, p.y, bb.t + d / 15 + 2) < 6) continue
+    let crowd = 0
+    for (let k = 0; k < bb.nEn; k++) {
+      const e = bb.en[k]
+      if (e !== target && !e.npc && Math.hypot(e.x - p.x, e.y - p.y) < 60) crowd++
+    }
+    if (crowd >= bb.P.laserRushCrowd) continue
+    bd = d
+    sc.wpn = p
+  }
+  return sc.wpn !== null
+}
+
+/** go and take sc.wpn (boost while energy allows), shooting `target` on the way */
+function rushIntent(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track | null): void {
+  sc.lc.item = sc.wpn
+  sc.lc.npc = null
+  lootIntent(bb, sc.lc, it, bb.energy > bb.P.laserRushEnergy ? PACE_BOOST : PACE_WALK)
+  if (target) {
+    it.targetId = target.id
+    it.face = FACE_THREATS
+  }
+  it.label = "rushL"
 }
 
 /** every visible mech is at least `clear` m from the item */
@@ -303,8 +346,30 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
   const target = pickTarget(bb)
   const zl = zoneDuty(bb, sc.zg)
 
+  // 0'. opening jet scan: straight up to jetScan m above the ground while spinning, then fall back scanning
+  if (P.jetScan > 0 && sc.js < 3) {
+    const w = bb.world
+    const g = w ? w.groundZ(bb.x, bb.y) : bb.z
+    const close = target !== null && target.dist < 100
+    if (sc.js === 0) {
+      const h = bb.me.stats.height ?? 9
+      const open = !w || w.segClear(bb.x, bb.y, bb.z + h + 0.2, bb.x, bb.y, bb.z + h + P.jetScan + 2)
+      sc.js = bb.t < 3 && bb.grounded && open && !close && zl < 2 && bb.energy >= P.jetScanMinE + 20 && bb.t - bb.tHurt > 2 ? 1 : 3
+    }
+    if (sc.js === 1 && (bb.z - g >= P.jetScan || bb.energy < P.jetScanMinE || bb.t - bb.tHurt < 0.5 || close || bb.t > 8 || (bb.t > 1 && bb.grounded))) sc.js = 2
+    if (sc.js === 2 && (bb.grounded || close || bb.t > 12)) sc.js = 3
+    if (sc.js < 3) {
+      it.hold(bb.x, bb.y, bb.z, sc.js === 1 ? "jetscan" : "jsfall")
+      it.jetUp = sc.js === 1
+      it.face = FACE_SCAN
+      if (target) it.targetId = target.id
+      weaponReflex(bb, it)
+      return it
+    }
+  }
+
   // 0. opening: one full turn on the spot shows every pickup / crate / mech within 200 m before we commit
-  if (bb.t < P.openScanS && !target && bb.t - bb.tHurt > 2 && zl < 2) {
+  if (bb.t < P.openScanS && !target && bb.t - bb.tHurt > 2 && zl < 2 && !(P.jetScan > 0)) {
     it.hold(bb.x, bb.y, bb.z, "scan")
     it.face = FACE_SCAN
     weaponReflex(bb, it)
@@ -341,6 +406,13 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
   const engD = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2)
   if (target && engaged) {
+    // no laser yet: go for a known one (boost), shooting on the way, unless this duel is nearly won
+    const tHp = target.hp >= 0 && target.maxHp > 0 ? target.hp / target.maxHp : 1
+    if (P.laserRush > 0 && !bb.haveLaser && !(tHp < P.laserRushFinish && target.dist < P.laserRushFinishDist) && rushLaser(bb, P.laserRush, sc, false, target)) {
+      rushIntent(bb, sc, it, target)
+      weaponReflex(bb, it)
+      return it
+    }
     // a known lightning (or, without one, a wanted weapon) further away: worth leaving the duel range for
     if ((P.duelLtgDist > 0 && bestWeapon(bb, P.duelLtgDist, sc, W_LIGHTNING)) || (P.duelLaserDist > 0 && !bb.haveLaser && bestWeapon(bb, P.duelLaserDist, sc, W_LASER))) {
       sc.lc.item = sc.wpn
@@ -396,6 +468,14 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
   const hurt = bb.hpFrac < healUntil(bb)
   if (!hurt) m.regen = false
   const recentEnemy = bb.t - bb.tEnemySeen < 6
+
+  // 5'. no laser yet and one is known: straight there (roofs too), before any other loot
+  if (P.laserRush > 0 && !bb.haveLaser && zl < 1 && rushLaser(bb, P.laserRush, sc, true, target)) {
+    rushIntent(bb, sc, it, target)
+    if (!target) it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
+    weaponReflex(bb, it)
+    return it
+  }
 
   // 5. loot
   if (zl >= 1 && !(bestLoot(bb, hurt, 60, sc.lc) && sc.lc.score > 6)) {

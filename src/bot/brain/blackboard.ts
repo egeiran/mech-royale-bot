@@ -313,6 +313,15 @@ export class Blackboard {
     this.cubes = me.cubes
     this.radius = st.radius ?? 2.5
     this.height = st.height ?? 9
+    // the real server keeps self.stats.radius / height at the base values while the body grows 5 % per cube
+    // (eye / muzzle height do scale: 6 cubes -> eye 10.4 m, body 11.7 m). Planning for a 9 m body sent a grown
+    // mech under an 11.5 m bridge again and again (41 s jet loop, zone death). Use the real size.
+    if (this.P.navBodyFromCubes > 0) {
+      const cm = this.cfg.mech
+      const sc = Math.max(1 + ((this.cfg.cubes.size_per_cube as number) ?? 0.05) * me.cubes, (st.eye_height ?? 8) / (cm.eye_height ?? 8))
+      this.radius = Math.max(this.radius, (cm.radius ?? 2.5) * sc)
+      this.height = Math.max(this.height, (cm.height ?? 9) * sc)
+    }
     this.eyeZ = st.eye_height ?? 8
     this.muzzleH = st.muzzle_height ?? 7
     this.walk = st.walk_speed ?? 11.7
@@ -448,6 +457,38 @@ export class Blackboard {
   }
   get haveMortar(): boolean {
     return (this.held & W_MORTAR) !== 0
+  }
+
+  /** goals the nav watchdog gave up on (2 trips): x, y pairs, kept for the match */
+  readonly badGoals = new Float64Array(32)
+  nBadGoals = 0
+  isBadGoal(x: number, y: number): boolean {
+    for (let i = 0; i < this.nBadGoals; i++) if (Math.hypot(this.badGoals[2 * i] - x, this.badGoals[2 * i + 1] - y) < 10) return true
+    return false
+  }
+  addBadGoal(x: number, y: number): void {
+    if (this.isBadGoal(x, y)) return
+    const i = this.nBadGoals < 16 ? this.nBadGoals++ : 15
+    this.badGoals[2 * i] = x
+    this.badGoals[2 * i + 1] = y
+  }
+
+  private lasDT = -1
+  private lasD = 1e9
+  /** horizontal distance to the nearest remembered laser pickup (1e9 = none known), cached per observation */
+  nearestLaserDist(): number {
+    if (this.lasDT === this.t) return this.lasD
+    this.lasDT = this.t
+    let bd = 1e9
+    const items = this.loot.items
+    for (let i = 0; i < items.length; i++) {
+      const p = items[i]
+      if (p.type !== L_PICKUP || p.wk !== W_LASER || p.badUntil > this.t) continue
+      const d = Math.hypot(p.x - this.x, p.y - this.y)
+      if (d < bd) bd = d
+    }
+    this.lasD = bd
+    return bd
   }
 
   /** how many stacks of an upgrade we own */

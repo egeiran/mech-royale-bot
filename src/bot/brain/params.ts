@@ -111,6 +111,23 @@ export const DEFAULTS = {
   ghostHealUntil: 0.9,
   /** SQUAD opening: spin on the spot for this long (one turn = 1.9 s) to see all loot around before moving */
   openScanS: 1.9,
+  /** SQUAD opening "jet scan" (laser agent): at t < 3 s jump and jet straight up to this many m above the ground
+   *  while spinning, so pickups behind buildings / on roofs within 200 m are seen and remembered (real layouts:
+   *  spawns that see >= 1 laser 39 % from the ground, 62 % from +20 m). 0 = off */
+  jetScan: 0,
+  /** ... stop jetting below this energy */
+  jetScanMinE: 45,
+  /** without a laser, go for a known laser within this distance, also mid-duel (boost while energy >
+   *  laserRushEnergy; ground-level items only while engaged). 0 = off */
+  laserRush: 0,
+  laserRushEnergy: 35,
+  /** ... but finish the duel first when the target is below this HP fraction and within laserRushFinishDist */
+  laserRushFinish: 0.35,
+  laserRushFinishDist: 110,
+  /** ... and not when this many other mechs (besides the target) are within 60 m of the laser */
+  laserRushCrowd: 2,
+  /** no lightning pickups while we hold no laser and a laser is known within this distance (0 = off) */
+  ltgVetoLaser: 0,
   /** kite style: preferred distance */
   rangeKite: 14,
   /** width of the dead band around the preferred range in which we only strafe */
@@ -351,6 +368,12 @@ export const DEFAULTS = {
   arriveDist: 2.0,
   /** allow jets in plans when energy is above this */
   jetMinEnergy: 45,
+  /** plan with the grown body size (1 + size_per_cube * cubes, or the eye-height ratio) because the real server
+   *  reports unscaled self.stats.radius / height (1 = on, bug fix; 0 = old behaviour) */
+  navBodyFromCubes: 1,
+  /** nav watchdog: no progress toward the same goal for this many s while commanding a move -> the goal / the
+   *  blocked spot is blacklisted, replan on foot without jets (0 = off) */
+  navWatchdogS: 0,
   /** boost when travelling further than this and energy is above boostMinEnergy (SQUAD only, no enemy near) */
   boostTravelDist: 9999,
   boostMinEnergy: 70,

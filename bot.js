@@ -2528,6 +2528,7 @@ class Intent {
   pace = PACE_WALK;
   arrive = 2;
   allowJet = true;
+  jetUp = false;
   targetId = -1;
   style = STYLE_PUSH;
   range = 25;
@@ -2545,6 +2546,7 @@ class Intent {
     this.pace = PACE_WALK;
     this.arrive = 2;
     this.allowJet = true;
+    this.jetUp = false;
     this.targetId = -1;
     this.style = STYLE_PUSH;
     this.range = 25;
@@ -2884,6 +2886,12 @@ class Blackboard {
     this.cubes = me.cubes;
     this.radius = st.radius ?? 2.5;
     this.height = st.height ?? 9;
+    if (this.P.navBodyFromCubes > 0) {
+      const cm = this.cfg.mech;
+      const sc = Math.max(1 + (this.cfg.cubes.size_per_cube ?? 0.05) * me.cubes, (st.eye_height ?? 8) / (cm.eye_height ?? 8));
+      this.radius = Math.max(this.radius, (cm.radius ?? 2.5) * sc);
+      this.height = Math.max(this.height, (cm.height ?? 9) * sc);
+    }
     this.eyeZ = st.eye_height ?? 8;
     this.muzzleH = st.muzzle_height ?? 7;
     this.walk = st.walk_speed ?? 11.7;
@@ -3023,6 +3031,40 @@ class Blackboard {
   }
   get haveMortar() {
     return (this.held & W_MORTAR) !== 0;
+  }
+  badGoals = new Float64Array(32);
+  nBadGoals = 0;
+  isBadGoal(x, y) {
+    for (let i = 0;i < this.nBadGoals; i++)
+      if (Math.hypot(this.badGoals[2 * i] - x, this.badGoals[2 * i + 1] - y) < 10)
+        return true;
+    return false;
+  }
+  addBadGoal(x, y) {
+    if (this.isBadGoal(x, y))
+      return;
+    const i = this.nBadGoals < 16 ? this.nBadGoals++ : 15;
+    this.badGoals[2 * i] = x;
+    this.badGoals[2 * i + 1] = y;
+  }
+  lasDT = -1;
+  lasD = 1e9;
+  nearestLaserDist() {
+    if (this.lasDT === this.t)
+      return this.lasD;
+    this.lasDT = this.t;
+    let bd = 1e9;
+    const items = this.loot.items;
+    for (let i = 0;i < items.length; i++) {
+      const p = items[i];
+      if (p.type !== L_PICKUP || p.wk !== W_LASER || p.badUntil > this.t)
+        continue;
+      const d = Math.hypot(p.x - this.x, p.y - this.y);
+      if (d < bd)
+        bd = d;
+    }
+    this.lasD = bd;
+    return bd;
   }
   upgradeCount(id) {
     let n = 0;
@@ -3767,6 +3809,10 @@ class Executor {
   unstickUntil = -1;
   unstickYaw = 0;
   unstickN = 0;
+  unstickX = 1e9;
+  unstickY = 1e9;
+  unstickT = -1e9;
+  unstickRep = 0;
   mx = 0;
   my = 0;
   jump = false;
@@ -3823,6 +3869,11 @@ class Executor {
         speedScale = Math.min(1, P.silentSpeed / bb.walk);
       else if (it.pace === PACE_BOOST && bb.grounded && !this.mv.noBoost && bb.energy > 12 && this.mv.dist > 10 && (this.mx !== 0 || this.my !== 0))
         this.boost = true;
+    }
+    if (it.jetUp) {
+      this.mx = this.my = 0;
+      this.jump = bb.grounded;
+      this.boost = !bb.grounded;
     }
     if (this.mx === 0 && this.my === 0 && bb.grounded && bb.t - bb.tHurt < 1.5 && it.kind !== K_CAPTURE) {
       const bx = Math.cos(bb.lastHurtBearing), by = Math.sin(bb.lastHurtBearing);
@@ -4031,6 +4082,13 @@ class Executor {
       a.drop = it.dropOnly;
     if (this.slowRun >= 12 && bb.t >= this.unstickUntil) {
       this.unstickN++;
+      if (Math.hypot(bb.x - this.unstickX, bb.y - this.unstickY) < 6 && bb.t - this.unstickT < 20)
+        this.unstickRep++;
+      else
+        this.unstickRep = 0;
+      this.unstickX = bb.x;
+      this.unstickY = bb.y;
+      this.unstickT = bb.t;
       const base = Math.atan2(this.my, this.mx);
       const turn = this.unstickN % 4 === 1 ? 0 : this.unstickN % 4 === 2 ? 1.4 : this.unstickN % 4 === 3 ? -1.4 : Math.PI;
       this.unstickYaw = base + turn;
@@ -4043,7 +4101,7 @@ class Executor {
       speedScale = 1;
       if (bb.grounded)
         this.jump = true;
-      else if (bb.energy > 8)
+      else if (bb.energy > 8 && !(P.navWatchdogS > 0 && this.unstickRep >= 2))
         this.boost = bb.t < this.unstickUntil - 0.4;
     }
     let mx = this.mx * speedScale, my = this.my * speedScale;
@@ -5736,6 +5794,17 @@ class Mover {
   noBoost = false;
   plans = 0;
   stuckEvents = 0;
+  wdGX = 1e9;
+  wdGY = 1e9;
+  wdBest = 1e9;
+  wdT = 0;
+  wdX = 0;
+  wdY = 0;
+  inflate = 1;
+  inflateT = -1e9;
+  noJetUntil = -1e9;
+  watchdogTrips = 0;
+  wdGoalTrips = 0;
   constructor(world, mech) {
     this.world = world;
     let nav = null;
@@ -5816,6 +5885,39 @@ class Mover {
       return;
     }
     const nav = this.nav;
+    let wdTrip = false;
+    if (P.navWatchdogS > 0) {
+      if (Math.hypot(gx - this.wdGX, gy - this.wdGY) > 12) {
+        this.wdGoalTrips = 0;
+        this.wdGX = gx;
+        this.wdGY = gy;
+        this.wdBest = d;
+        this.wdT = bb.t;
+        this.wdX = bb.x;
+        this.wdY = bb.y;
+      } else if (d < this.wdBest - 2 || Math.hypot(bb.x - this.wdX, bb.y - this.wdY) > 8) {
+        this.wdBest = Math.min(d, this.wdBest);
+        this.wdT = bb.t;
+        this.wdX = bb.x;
+        this.wdY = bb.y;
+      } else if (bb.t - this.wdT > P.navWatchdogS) {
+        wdTrip = true;
+        this.watchdogTrips++;
+        if (++this.wdGoalTrips >= 2)
+          bb.addBadGoal(gx, gy);
+        this.inflate = Math.min(1.35, this.inflate + 0.15);
+        this.inflateT = bb.t;
+        this.noJetUntil = bb.t + 12;
+        this.unreachable = true;
+        this.wdT = bb.t;
+        this.wdBest = d;
+        this.stuckFor = 1;
+      }
+      if (this.inflate > 1 && bb.t - this.inflateT > 40)
+        this.inflate = 1;
+    }
+    if (bb.t < this.noJetUntil || P.navWatchdogS > 0 && bb.nBadGoals > 0 && bb.isBadGoal(gx, gy))
+      allowJet = false;
     if (nav && this.follower) {
       const moved = Math.hypot(gx - this.goalX, gy - this.goalY) + Math.abs(gz - this.goalZ);
       const interrupted = bb.tick - this.lastGotoTick > (bb.cfg.match.decide_every ?? 2) * 2;
@@ -5824,8 +5926,8 @@ class Mover {
       if (need && this.plannedTick !== bb.tick && (bb.grounded || !this.havePath)) {
         this.plannedTick = bb.tick;
         const q = this.q;
-        q.radius = bb.radius;
-        q.height = bb.height;
+        q.radius = bb.radius * this.inflate;
+        q.height = bb.height * this.inflate;
         q.allowJet = allowJet;
         q.energy = Math.max(bb.energy, bb.maxEnergy * 0.95);
         const cap = Math.min(P.navMaxExp, Math.round(2500 + 70 * d));
@@ -5836,7 +5938,7 @@ class Mover {
         if (p) {
           this.path = p;
           this.havePath = true;
-          this.unreachable = !p.complete;
+          this.unreachable = !p.complete || wdTrip;
         } else {
           this.havePath = false;
           this.unreachable = false;
@@ -6148,6 +6250,14 @@ var DEFAULTS = {
   ghostHealHp: 0,
   ghostHealUntil: 0.9,
   openScanS: 1.9,
+  jetScan: 0,
+  jetScanMinE: 45,
+  laserRush: 0,
+  laserRushEnergy: 35,
+  laserRushFinish: 0.35,
+  laserRushFinishDist: 110,
+  laserRushCrowd: 2,
+  ltgVetoLaser: 0,
   rangeKite: 14,
   rangeBand: 5,
   strafeSpeed: 1,
@@ -6269,6 +6379,8 @@ var DEFAULTS = {
   navMaxExp: 14000,
   arriveDist: 2,
   jetMinEnergy: 45,
+  navBodyFromCubes: 1,
+  navWatchdogS: 0,
   boostTravelDist: 9999,
   boostMinEnergy: 70,
   probeDist: 4.5,
@@ -6486,6 +6598,8 @@ function pickupValue(bb, wk) {
   if (bb.held & wk)
     return 0;
   const free = bb.freeSlot >= 0;
+  if (wk === W_LIGHTNING && P.ltgVetoLaser > 0 && !bb.haveLaser && bb.nearestLaserDist() < P.ltgVetoLaser)
+    return 0;
   if (wk === W_LIGHTNING)
     return free ? P.valLightning : bb.haveMortar ? P.valLightning : bb.haveLaser ? P.valSwapToLightning : 0;
   if (wk === W_LASER)
@@ -6651,6 +6765,8 @@ function wantDrop(bb, enemyClear) {
       continue;
     if (d.holder !== null && d.holder !== bb.me.id && d.capture_s - d.progress < eta)
       continue;
+    if (bb.isBadGoal(d.pos[0], d.pos[1]))
+      continue;
     if (enemyClear > 0) {
       let near = false;
       const tr = bb.tracker.mechs;
@@ -6725,6 +6841,7 @@ class SquadScratch {
   peek = newSpot();
   peekT = -1e9;
   peekOk = false;
+  js = 0;
 }
 function travelPace(bb, x, y) {
   if (bb.nEn > 0 || bb.energy < bb.P.boostMinEnergy)
@@ -6752,6 +6869,45 @@ function bestWeapon(bb, maxDist, sc, wk) {
     }
   }
   return sc.wpn !== null;
+}
+function rushLaser(bb, maxDist, sc, roof, target) {
+  const items = bb.loot.items;
+  let bd = maxDist;
+  sc.wpn = null;
+  if (pickupValue(bb, W_LASER) <= 0)
+    return false;
+  for (let i = 0;i < items.length; i++) {
+    const p = items[i];
+    if (p.type !== L_PICKUP || p.wk !== W_LASER || p.badUntil > bb.t)
+      continue;
+    const climb = p.z - bb.z;
+    if (climb > (roof ? 40 : 3))
+      continue;
+    const d = Math.hypot(p.x - bb.x, p.y - bb.y);
+    if (d >= bd || bb.zone.marginAt(p.x, p.y, bb.t + d / 15 + 2) < 6)
+      continue;
+    let crowd = 0;
+    for (let k = 0;k < bb.nEn; k++) {
+      const e = bb.en[k];
+      if (e !== target && !e.npc && Math.hypot(e.x - p.x, e.y - p.y) < 60)
+        crowd++;
+    }
+    if (crowd >= bb.P.laserRushCrowd)
+      continue;
+    bd = d;
+    sc.wpn = p;
+  }
+  return sc.wpn !== null;
+}
+function rushIntent(bb, sc, it, target) {
+  sc.lc.item = sc.wpn;
+  sc.lc.npc = null;
+  lootIntent(bb, sc.lc, it, bb.energy > bb.P.laserRushEnergy ? PACE_BOOST : PACE_WALK);
+  if (target) {
+    it.targetId = target.id;
+    it.face = FACE_THREATS;
+  }
+  it.label = "rushL";
 }
 function lootIsClear(bb, item, clear) {
   for (let i = 0;i < bb.nEn; i++) {
@@ -6982,7 +7138,30 @@ function decideSquad(bb, mv, sc) {
   const it = bb.intent.reset();
   const target = pickTarget(bb);
   const zl = zoneDuty(bb, sc.zg);
-  if (bb.t < P.openScanS && !target && bb.t - bb.tHurt > 2 && zl < 2) {
+  if (P.jetScan > 0 && sc.js < 3) {
+    const w = bb.world;
+    const g = w ? w.groundZ(bb.x, bb.y) : bb.z;
+    const close = target !== null && target.dist < 100;
+    if (sc.js === 0) {
+      const h = bb.me.stats.height ?? 9;
+      const open = !w || w.segClear(bb.x, bb.y, bb.z + h + 0.2, bb.x, bb.y, bb.z + h + P.jetScan + 2);
+      sc.js = bb.t < 3 && bb.grounded && open && !close && zl < 2 && bb.energy >= P.jetScanMinE + 20 && bb.t - bb.tHurt > 2 ? 1 : 3;
+    }
+    if (sc.js === 1 && (bb.z - g >= P.jetScan || bb.energy < P.jetScanMinE || bb.t - bb.tHurt < 0.5 || close || bb.t > 8 || bb.t > 1 && bb.grounded))
+      sc.js = 2;
+    if (sc.js === 2 && (bb.grounded || close || bb.t > 12))
+      sc.js = 3;
+    if (sc.js < 3) {
+      it.hold(bb.x, bb.y, bb.z, sc.js === 1 ? "jetscan" : "jsfall");
+      it.jetUp = sc.js === 1;
+      it.face = FACE_SCAN;
+      if (target)
+        it.targetId = target.id;
+      weaponReflex(bb, it);
+      return it;
+    }
+  }
+  if (bb.t < P.openScanS && !target && bb.t - bb.tHurt > 2 && zl < 2 && !(P.jetScan > 0)) {
     it.hold(bb.x, bb.y, bb.z, "scan");
     it.face = FACE_SCAN;
     weaponReflex(bb, it);
@@ -7010,6 +7189,12 @@ function decideSquad(bb, mv, sc) {
   const engD = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist;
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2);
   if (target && engaged) {
+    const tHp = target.hp >= 0 && target.maxHp > 0 ? target.hp / target.maxHp : 1;
+    if (P.laserRush > 0 && !bb.haveLaser && !(tHp < P.laserRushFinish && target.dist < P.laserRushFinishDist) && rushLaser(bb, P.laserRush, sc, false, target)) {
+      rushIntent(bb, sc, it, target);
+      weaponReflex(bb, it);
+      return it;
+    }
     if (P.duelLtgDist > 0 && bestWeapon(bb, P.duelLtgDist, sc, W_LIGHTNING) || P.duelLaserDist > 0 && !bb.haveLaser && bestWeapon(bb, P.duelLaserDist, sc, W_LASER)) {
       sc.lc.item = sc.wpn;
       sc.lc.npc = null;
@@ -7058,6 +7243,13 @@ function decideSquad(bb, mv, sc) {
   if (!hurt)
     m.regen = false;
   const recentEnemy = bb.t - bb.tEnemySeen < 6;
+  if (P.laserRush > 0 && !bb.haveLaser && zl < 1 && rushLaser(bb, P.laserRush, sc, true, target)) {
+    rushIntent(bb, sc, it, target);
+    if (!target)
+      it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
+    weaponReflex(bb, it);
+    return it;
+  }
   if (zl >= 1 && !(bestLoot(bb, hurt, 60, sc.lc) && sc.lc.score > 6)) {
     zoneIntent(bb, sc.zg, it, target);
     it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
@@ -9007,5 +9199,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-style1g.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, rangeLaser: 25, rangeKite: 25, rangeVsLightning: 25, rangeLaserVsMortar: 25, rangeVsMortar: 25, kiteBoostGap: 999 } });
+// src/entries/pj-style1f.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5 } });

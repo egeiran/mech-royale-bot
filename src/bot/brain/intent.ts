@@ -45,6 +45,8 @@ export class Intent {
   arrive = 2
   /** may the path use jets */
   allowJet = true
+  /** jet straight up (jump when grounded, jets in the air), no horizontal move: the opening jet scan */
+  jetUp = false
   /** mech / NPC to shoot (track id), -1 = none */
   targetId = -1
   /** fight movement */
@@ -71,6 +73,7 @@ export class Intent {
     this.pace = PACE_WALK
     this.arrive = 2
     this.allowJet = true
+    this.jetUp = false
     this.targetId = -1
     this.style = STYLE_PUSH
     this.range = 25

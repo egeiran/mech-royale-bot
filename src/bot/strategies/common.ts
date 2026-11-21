@@ -176,6 +176,9 @@ export function pickupValue(bb: Blackboard, wk: number): number {
   const P = bb.P
   if (bb.held & wk) return 0
   const free = bb.freeSlot >= 0
+  // a laser is worth far more than lightning (which also pulls us into losing 14 m brawls): skip lightning
+  // while a laser is known nearby and we hold none
+  if (wk === W_LIGHTNING && P.ltgVetoLaser > 0 && !bb.haveLaser && bb.nearestLaserDist() < P.ltgVetoLaser) return 0
   if (wk === W_LIGHTNING) return free ? P.valLightning : bb.haveMortar ? P.valLightning : bb.haveLaser ? P.valSwapToLightning : 0
   if (wk === W_LASER) return free ? P.valLaser : bb.haveMortar ? P.valSwapFromMortar : bb.haveLightning ? P.valSwapToLaser : 0
   if (wk === W_MORTAR) return free ? P.valMortar : 0
@@ -337,6 +340,7 @@ export function wantDrop(bb: Blackboard, enemyClear: number): number {
     if (d.lands_in > eta + P.dropLeadS) continue
     if (bb.zone.marginAt(d.pos[0], d.pos[1], bb.t + Math.max(eta, d.lands_in) + d.capture_s + 2) < 4) continue
     if (d.holder !== null && d.holder !== bb.me.id && d.capture_s - d.progress < eta) continue
+    if (bb.isBadGoal(d.pos[0], d.pos[1])) continue
     if (enemyClear > 0) {
       let near = false
       const tr = bb.tracker.mechs
