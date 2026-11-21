@@ -3,10 +3,6 @@
  * search them. Units: metres, seconds, radians unless the name says otherwise. Fractions are 0..1.
  */
 export const DEFAULTS = {
-  /** play style preset applied under the explicit params: 0 = default (close-range duelist),
-   *  1 = "laser kite" (STYLE_LASER_KITE below: laser first, fight at 65-85 m backing off, break off at 70 % HP
-   *  to regenerate behind cover, fight from a point only the target sees, no mid-fight looting) */
-  style: 0,
   // ---------------------------------------------------------------- mode
   /** 0 = auto (perception/mode.ts), 1 = force SQUAD, 2 = force FFA */
   forceMode: 0,
@@ -27,8 +23,6 @@ export const DEFAULTS = {
   rangeGun: 14,
   /** preferred duel distance when we hold lightning (inside its 45 m range) */
   rangeLightning: 14,
-  /** preferred duel distance while we hold a laser (0 = use the other range* keys) */
-  rangeLaser: 0,
   /** preferred distance when the enemy holds lightning and we do not (stay outside its arc) */
   rangeVsLightning: 14,
   /** preferred distance with a laser against an enemy that holds a mortar (cook-off) */
@@ -37,14 +31,9 @@ export const DEFAULTS = {
   rangeVsMortar: 12,
   /** SQUAD: a visible mech that is not engaging us is only duelled inside this distance */
   engageDist: 250,
-  /** ... and only inside this distance while HP is below squadRegenUntil */
-  engageHurtDist: 999,
   /** boost away along the most open direction when the target is closer than the preferred range by more than
    *  this (needs kiteBoostEnergy). 999 = off: neutral-to-negative against the league squad (96 seeds). */
   kiteBoostGap: 999,
-  /** duel footwork with several mechs in sight: weight of a drift away from the others (0 = off, 1 = as strong as
-   *  the strafe) */
-  kiteAwayW: 0,
   kiteBoostEnergy: 25,
   /** boost toward a target further than this (closing time is time under fire without dealing damage) */
   approachBoostDist: 999,
@@ -53,49 +42,14 @@ export const DEFAULTS = {
   lightningKeepEnergy: 75,
   /** in a duel, still pick up cubes / wanted weapons lying within this distance (kills drop cubes + 2) */
   duelLootDist: 32,
-  /** in a duel, collect cubes / wanted weapons within lootClearMax m while every visible mech is at least
-   *  lootClearDist m from the item (0 = off) */
-  lootClearDist: 0,
-  lootClearMax: 90,
-  /** in a duel, go for a known ground-level lightning pickup within this distance (0 = off) */
-  duelLtgDist: 0,
-  /** ... and for a laser (when we hold none) within this distance (0 = off) */
-  duelLaserDist: 0,
   /** SQUAD: with at least this HP fraction and nobody in sight, go and look for the next mech */
   seekHp: 0.6,
-  /** SQUAD: nothing to loot and nobody in sight -> hold position and scan instead of seeking / exploring (1) */
-  idleHold: 0,
-  /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
-  seekSoundS: 0,
   /** SQUAD: reload before contact when the target is further than this and the mag is below reloadIdleFrac
    *  (999 = off: -0.5 against the league squad, it kept interrupting the approach fire) */
   reloadFarDist: 999,
   /** with several enemies in sight, orbit the target until it stands between us and the others; this is the
    *  angular tolerance (rad) inside which we stop orbiting and strafe randomly. 0 = off */
   shieldOrbit: 0.3,
-  /** several enemies in sight: fight from a nearby point (<= 14 m) where only the target has a line on us when
-   *  it beats staying put by this score margin (one exposed other ~ 40-60). 0 = off */
-  peekMargin: 0,
-  /** re-evaluate the peek spot every this many seconds */
-  peekEvery: 0.5,
-  /** SQUAD: an NPC drone shooting us from within this distance during a mech duel is killed first (when it is
-   *  closer than the mech, the mech is beyond 30 m, or the drone is nearly dead). 0 = off */
-  npcFirstDist: 0,
-  /** SQUAD: hold fire on a mech that has not noticed us (not aimed / shot at us, not hit by us, we are not
-   *  hurt) until it is this close. 0 = off */
-  ambushDist: 0,
-  /** target choice: seconds of time-to-kill a mech's damage per second on us is worth, per 100 dps (0 = off) */
-  targetDpsW: 0,
-  /** SQUAD survivor mode (latched): play the FFA ghost (decideFfa) from this match time, after this many kills, or
-   *  once at least ghostOnUs mechs shoot / aim at us at the same time (not before ghostOnUsAfter s). 0 = off */
-  ghostT: 0,
-  ghostKills: 0,
-  ghostOnUs: 0,
-  ghostOnUsAfter: 0,
-  /** SQUAD evasive heal: below this HP fraction play the ghost (break contact, hide, regenerate) until
-   *  ghostHealUntil, then hunt again. 0 = off */
-  ghostHealHp: 0,
-  ghostHealUntil: 0.9,
   /** SQUAD opening: spin on the spot for this long (one turn = 1.9 s) to see all loot around before moving */
   openScanS: 1.9,
   /** kite style: preferred distance */
@@ -129,21 +83,8 @@ export const DEFAULTS = {
   lightningRangeFrac: 0.97,
   /** laser: maximum distance at which we bother charging */
   laserMaxDist: 230,
-  /** laser: 1 = keep the gun lead aim (gun keeps firing) while charging and release on it when the beam hits;
-   *  direct laser aim only after laserGunHoldS s at full charge. 0 = laser aim from 0.25 s before full charge */
-  laserKeepGun: 0,
-  laserGunHoldS: 0.6,
-  /** 1 = the pre-fix release (aim command not set on the release decision: beams left on the gun lead). Only for
-   *  calibration anchors that were scored with that code. */
-  laserLegacyRelease: 0,
   /** laser: target cylinder shrink for the release gate */
   laserShrink: 0.75,
-  /** fire a held mortar at mechs (1) or never (0); flat arc onto the feet, only between these distances */
-  mortarFire: 0,
-  mortarMinDist: 12,
-  mortarMaxDist: 90,
-  /** aim error (rad) under which the mortar trigger is pulled */
-  mortarAimTol: 0.04,
   /** reload out of combat when the magazine is below this fraction */
   reloadIdleFrac: 0.7,
   /** reload in combat without a shot line for this long when ammo is at most reloadLowAmmo */
@@ -166,10 +107,6 @@ export const DEFAULTS = {
   squadFinishHp: 0.3,
   /** SQUAD: resume normal behaviour once HP is back above this fraction */
   squadRegenUntil: 0.9,
-  /** SQUAD mode only: HP fraction that ends "hurt" (heal / regen exit); < 0 = use squadRegenUntil (FFA keeps that) */
-  squadHealUntil: -1,
-  /** SQUAD mode only: loot utility lost per second of travel; < 0 = use lootTimeCost */
-  squadLootTimeCost: -1,
   /** SQUAD: maximum cover distance worth running to */
   coverMaxDist: 45,
   /** break line of sight while reloading when the target has more than this HP fraction (0 = never; 0.35 was
@@ -195,8 +132,6 @@ export const DEFAULTS = {
   valCube: 10,
   /** value of a crate (1 cube + 50 % weapon), before the time cost of killing it */
   valCrate: 9,
-  /** weight of the laser drop chance in a crate's value (0 = only lightning counts, as before) */
-  crateLaserW: 0,
   /** value of an NPC (2 cubes) */
   valNpc: 13,
   /** value of the weapons when the slot is empty */
@@ -205,8 +140,6 @@ export const DEFAULTS = {
   valMortar: 0,
   /** value of swapping laser -> lightning / mortar -> anything */
   valSwapToLightning: 28,
-  /** value of swapping lightning -> laser (0 = never) */
-  valSwapToLaser: 0,
   valSwapFromMortar: 20,
   /** utility lost per second of travel */
   lootTimeCost: 1.0,
@@ -226,8 +159,6 @@ export const DEFAULTS = {
   valDrop: 60,
   /** supply drop: no known enemy closer to the ring than this (SQUAD) */
   dropEnemyClear: 60,
-  /** SQUAD: with a mech in sight, go to a drop only when it lands within this many s more than our travel time */
-  dropFightLeadS: 99,
   /** supply drop: go when it lands within this many seconds more than our travel time */
   dropLeadS: 12,
 
@@ -270,7 +201,7 @@ export const DEFAULTS = {
   ffaLootEnemyClear: 130,
   // ---- FFA v2 (src/bot/strategies/ffa_v2.ts, owned by the FFA agent; plan: data/intel/ffa-plan.md)
   /** FFA strategy version: 1 = ffa_v1.ts (ghost v1), 2 = ffa_v2.ts (phased ghost) */
-  ffaVersion: 2,
+  ffaVersion: 1,
   /** pocket search: max straight-line travel (m) and margin kept inside the next circle */
   ffaSpotMaxDist: 150,
   ffaSpotMargin: 12,
@@ -291,7 +222,7 @@ export const DEFAULTS = {
   /** after breaking LOS: stay hidden (still, healing) this long */
   ffaHideS: 30,
   /** a sighting by a mech that is not aiming at us only counts within this distance */
-  ffaSeenDist: 100,
+  ffaSeenDist: 230,
   /** a visible mech with a line to us (could see us if it turned) inside this distance: step out of its line */
   ffaDuckDist: 160,
   /** third-party: a visible mech below this HP fraction inside ffaThirdDist while we are above ffaThirdHp */
@@ -302,7 +233,7 @@ export const DEFAULTS = {
   ffaPickupDist: 35,
   ffaPickupExpo: 0.2,
   /** end-game: alive at or below this -> hunt / third-party when HP fraction >= ffaEndHp */
-  ffaEndAlive: 2,
+  ffaEndAlive: 4,
   ffaEndHp: 0.85,
   /** end-game: walk toward the freshest fight until this far from it */
   ffaEndApproach: 110,
@@ -311,19 +242,7 @@ export const DEFAULTS = {
   /** after a hide: stay at the covered point when its static exposure is below this (0 = always re-pick a pocket) */
   ffaStayExpo: 0,
   /** nobody known near for 10 s: silent loot like v1 (bestLoot within ffaLootDist) - 0 off, 1 on */
-  ffaCalmLoot: 1,
-  /** break LOS to SOLID cover (segClear from eye and muzzle to knee/centre/top) with a committed point; 0 = cover.safeDirection (sight only) */
-  ffaStrictCover: 0,
-  /** keep a chosen break point this long while it stays covered */
-  ffaBreakCommitS: 3,
-  /** third-party / final duel fight style: 1 = hold position (STYLE_HOLD, shoot from where we are), 0 = duelIntent (push to range) */
-  ffaThirdHold: 0,
-  ffaFinalHold: 0,
-  /** opening weapon rush: take a laser / lightning within ffaRushDist (any exposure) during the first ffaRushS s while a slot is free */
-  ffaRushS: 0,
-  ffaRushDist: 70,
-  /** v2: seconds shot at without any covered point before we turn and fight (v1 uses ffaFleePatience) */
-  ffaBreakPatience: 8,
+  ffaCalmLoot: 0,
   /** known-enemy memory horizon for avoidance */
   enemyMemoryS: 20,
 
@@ -381,39 +300,9 @@ export const DEFAULTS = {
 
 export type BrainParams = typeof DEFAULTS
 
-/**
- * style 1 = "laser kite" (data/intel/teams.md: top bots carry a laser, fight at 60-90 m backing off - house gun
- * aim falls to 32 % there, house lasers hit 20 % - break off fights at ~70 % HP to regenerate, avoid 2+ lines).
- * Every value is an ordinary param; explicit params override these.
- */
-export const STYLE_LASER_KITE: Partial<Record<keyof BrainParams, number>> = {
-  valLaser: 60,
-  valLightning: 15,
-  valSwapToLightning: 0,
-  valSwapToLaser: 40,
-  rangeLaser: 75,
-  rangeGun: 75,
-  rangeKite: 75,
-  rangeVsLightning: 75,
-  rangeLaserVsMortar: 75,
-  rangeVsMortar: 75,
-  rangeBand: 10,
-  kiteBoostGap: 30,
-  kiteBoostEnergy: 25,
-  peekMargin: 10,
-  squadDisengageRatio: 99,
-  squadDisengageHp: 0.7,
-  squadHealUntil: 0.95,
-  squadFinishHp: 0.3,
-  duelLootDist: 6,
-  laserKeepGun: 1,
-  lootClearDist: 55,
-}
-
-/** DEFAULTS, then the style preset (p.style), then any finite numeric key present in `p` (unknown keys ignored). */
+/** DEFAULTS overridden by any finite numeric key present in `p` (unknown keys are ignored). */
 export function resolveParams(p: Record<string, number> | undefined | null): BrainParams {
   const out: BrainParams = { ...DEFAULTS }
-  if (p && p.style === 1) Object.assign(out, STYLE_LASER_KITE)
   if (p) {
     for (const k in p) {
       const v = p[k]

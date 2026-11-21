@@ -322,58 +322,6 @@ export class Mover {
   }
 
   /**
-   * Peek spot for a fight against several mechs: a standable point near us from which `tgt` is in our shot
-   * line while as few of the other enemies (bb.en, within 150 m) as possible have a line on us. Score (lower is
-   * better) = exposed others * wOther (closer ones weigh more) + travel + distance from the wanted range.
-   * Writes the best into out (out.ok, out.score); returns the score of staying where we are (1e9 = no shot line).
-   */
-  findPeek(bb: Blackboard, tgt: Track, range: number, out: Spot): number {
-    out.ok = false
-    const w = this.world
-    const tz = tgt.z + 0.5 * tgt.height
-    const tz2 = tgt.z + 0.85 * tgt.height
-    const eye = bb.muzzleH
-    let here = 1e9
-    let best = 1e9
-    const base = bb.rng.next() * TAU
-    for (let ring = 0; ring < 4; ring++) {
-      const r = ring === 0 ? 0 : ring === 1 ? 5 : ring === 2 ? 9 : 14
-      const nk = ring === 0 ? 1 : 12
-      for (let k = 0; k < nk; k++) {
-        const a = base + (k * TAU) / nk
-        const px = bb.x + r * Math.cos(a), py = bb.y + r * Math.sin(a)
-        let pz = bb.z
-        if (r > 0) {
-          pz = this.standZ(bb, px, py, bb.z)
-          if (pz !== pz) continue
-          if (Math.abs(pz - bb.z) > 2.5) continue
-          if (bb.zone.margin(px, py) < 6) continue
-          if (!this.walkOk(bb, px, py)) continue
-        }
-        // our shot line on the target from there
-        if (!w.segClear(px, py, pz + eye, tgt.x, tgt.y, tz) && !w.segClear(px, py, pz + eye, tgt.x, tgt.y, tz2)) continue
-        let s = r * 0.8 + Math.abs(Math.hypot(tgt.x - px, tgt.y - py) - range) * 0.25
-        for (let i = 0; i < bb.nEn && s < best; i++) {
-          const e = bb.en[i]
-          if (e === tgt || e.dist > 150) continue
-          const ez = e.z + (8 / 9) * e.height
-          if (w.segClear(e.x, e.y, ez, px, py, pz + 0.5 * bb.height) || w.segClear(e.x, e.y, ez, px, py, pz + bb.height)) s += 20 + 1500 / (e.dist + 30)
-        }
-        if (r === 0) here = s
-        if (s < best) {
-          best = s
-          out.x = px
-          out.y = py
-          out.z = pz
-          out.ok = true
-          out.score = s
-        }
-      }
-    }
-    return here
-  }
-
-  /**
    * Hide-spot search for the ghost: samples points within P.hideSearchR and scores them by low exposure,
    * distance from known enemies and sound heat, travel distance, being hidden from every known enemy right
    * now, and staying inside the circle. `cur` (if ok) competes with a switch margin. Writes the best into out.

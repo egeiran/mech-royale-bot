@@ -25,8 +25,6 @@ export const STYLE_PUSH = 0
 export const STYLE_HOLD = 1
 export const STYLE_KITE = 2
 export const STYLE_PEEK = 3
-/** fight from the point (gx, gy, gz): walk there while shooting, then hover around it */
-export const STYLE_SPOT = 4
 
 /** torso policy when there is nothing to shoot */
 export const FACE_SCAN = 0 // sweep around the travel direction / spin when standing
