@@ -31,6 +31,7 @@ export function ourDps(bb: Blackboard, e: Track, dist: number): number {
     if (e.weapons & W_MORTAR) d *= 1 + (la.stats.cookoff ?? 0.6)
     dps += d
   }
+  if (bb.mor && P.mortarFire > 0 && dist >= P.mortarMinDist && dist <= P.mortarMaxDist) dps += ((bb.mor.stats.damage ?? 200) * 0.6) / (bb.mor.stats.cooldown ?? 2.6)
   return dps * bb.dmgMult
 }
 
@@ -105,6 +106,8 @@ export function pickTarget(bb: Blackboard): Track | null {
   for (let i = 0; i < bb.nEn; i++) {
     const e = bb.en[i]
     let s = Math.min(40, timeToKill(bb, e)) + e.dist / 30
+    // kill order: the mechs that hurt us most go first (damage race against several)
+    if (bb.P.targetDpsW > 0 && bb.los[e.id] === 1) s -= (bb.P.targetDpsW * theirDps(bb, e, e.dist)) / 100
     if (bb.los[e.id] !== 1) s += 6
     if (e.aimingAtUs) s -= 1.5
     if (bb.t - e.tShotAtUs < 3) s -= 1.5
