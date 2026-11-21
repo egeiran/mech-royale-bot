@@ -15,7 +15,7 @@
 import type { NavPath } from "../../contracts.ts"
 import type { NavEx, NavQueryEx } from "../../world/nav/index.ts"
 import { L_CUBE, L_PICKUP, type Blackboard } from "../brain/blackboard.ts"
-import { FACE_SCAN, FACE_THREATS, FACE_YAW, PACE_BOOST, PACE_SILENT, PACE_WALK, STYLE_HOLD, type Intent } from "../brain/intent.ts"
+import { FACE_SCAN, FACE_THREATS, FACE_YAW, PACE_BOOST, PACE_SILENT, PACE_WALK, type Intent } from "../brain/intent.ts"
 import type { Mover } from "../brain/navx.ts"
 import { createCover, createHideSpots, createSafeStep, type Cover, type EnemyView, type HideOpts, type HideSpots, type SafeStep } from "../cover/index.ts"
 import { S_DEATH, S_GUN, S_LASER, S_LIGHTNING } from "../perception/sounds.ts"
@@ -88,99 +88,6 @@ function coverOf(bb: Blackboard, mv: Mover, st: V2State): Cover | null {
     st.cover = null
   }
   return st.cover
-}
-
-const RINGS = [4, 7, 10, 14, 19, 25, 32, 40, 52]
-const NDIR = 16
-
-/**
- * Strict cover test against the first n views: no SOLID line (segClear, trees do not stop bullets) from an eye
- * or muzzle to our knee, centre or top. Sight-only cover is not enough: bots keep shooting the server's 5 s
- * memory position, and canopy blocks sight but not shots.
- */
-function hiddenAt(bb: Blackboard, st: V2State, n: number, x: number, y: number, z: number): boolean {
-  const w = bb.world
-  if (!w) return false
-  const h = bb.height
-  for (let i = 0; i < n; i++) {
-    const v = st.views[i]
-    const ez = v.z + 8 * (1 + 0.05 * (v.cubes ?? 0))
-    const mz = v.z + 6.5
-    if (w.segClear(v.x, v.y, ez, x, y, z + h - 0.3) || w.segClear(v.x, v.y, ez, x, y, z + 0.5 * h) || w.segClear(v.x, v.y, mz, x, y, z + 0.5 * h) || w.segClear(v.x, v.y, mz, x, y, z + 1.5)) return false
-  }
-  return true
-}
-
-/** nearest straight-walkable point hidden (strictly) from the first n views -> st.brk*; prefers not to run toward them */
-function breakPoint(bb: Blackboard, mv: Mover, st: V2State, n: number, maxDist: number): boolean {
-  const zn = bb.zone
-  let best = 1e9
-  let ok = false
-  for (let r = 0; r < RINGS.length; r++) {
-    const len = RINGS[r]
-    if (len > maxDist || len > best) break
-    for (let k = 0; k < NDIR; k++) {
-      const a = ((k + 0.5 * (r & 1)) * 2 * Math.PI) / NDIR
-      const ux = Math.cos(a), uy = Math.sin(a)
-      const px = bb.x + ux * len, py = bb.y + uy * len
-      let toward = 0
-      for (let i = 0; i < n; i++) {
-        const v = st.views[i]
-        const dx = v.x - bb.x, dy = v.y - bb.y
-        const d = Math.hypot(dx, dy) || 1
-        const dot = (dx * ux + dy * uy) / d
-        if (dot > toward) toward = dot
-      }
-      const score = len + 12 * toward
-      if (score >= best) continue
-      if (zn.margin(px, py) < 5) continue
-      const pz = mv.standZ(bb, px, py, bb.z)
-      if (pz !== pz || Math.abs(pz - bb.z) > 3) continue
-      if (!mv.walkOk(bb, px, py)) continue
-      if (!hiddenAt(bb, st, n, px, py, pz)) continue
-      best = score
-      ok = true
-      st.brkX = px
-      st.brkY = py
-      st.brkZ = pz
-    }
-  }
-  // nothing on a straight line (alcoves, corners): covered points reachable by a short nav path
-  const nav = mv.nav
-  if (!ok && nav) {
-    const q = st.q
-    q.radius = bb.radius
-    q.height = bb.height
-    q.energy = bb.maxEnergy
-    q.maxExpansions = 3000
-    let tries = 0
-    for (let r = 1; r < RINGS.length && !ok && tries < 6; r++) {
-      const len = RINGS[r]
-      if (len > maxDist) break
-      for (let k = 0; k < NDIR && tries < 6; k++) {
-        const a = ((k + 0.25) * 2 * Math.PI) / NDIR
-        const px = bb.x + Math.cos(a) * len, py = bb.y + Math.sin(a) * len
-        if (zn.margin(px, py) < 5) continue
-        const pz = mv.standZ(bb, px, py, bb.z)
-        if (pz !== pz || Math.abs(pz - bb.z) > 3) continue
-        if (!hiddenAt(bb, st, n, px, py, pz)) continue
-        tries++
-        const p = nav.plan(bb.x, bb.y, bb.z, px, py, pz, q, st.path ?? undefined)
-        if (!p) continue
-        st.path = p
-        if (!p.complete || p.cost * bb.walk > 1.8 * len + 10) continue
-        ok = true
-        st.brkX = px
-        st.brkY = py
-        st.brkZ = pz
-        break
-      }
-    }
-    q.maxExpansions = 20000
-  }
-  st.brkOk = ok
-  st.brkT = bb.t
-  return ok
 }
 
 /** a known (recent) enemy within dist, or footsteps nearby */
@@ -390,27 +297,16 @@ export function decideFfaV2(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     const cover = coverOf(bb, mv, st)
     const tgt = shooter ?? found
     const ss = st.ss
-    const strict = P.ffaStrictCover > 0
-    const hiddenNow = strict && hiddenAt(bb, st, nv, bb.x, bb.y, bb.z)
-    if (strict) {
-      // commit to a break point while it stays covered; otherwise search again (at most every 0.3 s)
-      const keep = st.brkOk && bb.t - st.brkT < P.ffaBreakCommitS && hiddenAt(bb, st, nv, st.brkX, st.brkY, st.brkZ)
-      if (!keep && (bb.t - st.brkT >= 0.3 || !st.brkOk)) breakPoint(bb, mv, st, nv, P.ffaBreakMaxDist)
-      ss.found = st.brkOk || hiddenNow
-      ss.x = st.brkOk ? st.brkX : bb.x
-      ss.y = st.brkOk ? st.brkY : bb.y
-      ss.z = st.brkOk ? st.brkZ : bb.z
-      ss.dist = hiddenNow ? 0 : st.brkOk ? Math.hypot(st.brkX - bb.x, st.brkY - bb.y) : 0
-    } else if (cover) cover.safeDirection(bb.x, bb.y, bb.z, bb.height, st.views, nv, P.ffaBreakMaxDist, ss)
+    if (cover) cover.safeDirection(bb.x, bb.y, bb.z, bb.height, st.views, nv, P.ffaBreakMaxDist, ss)
     else ss.found = false
-    if (!strict && ss.found && zn.margin(ss.x, ss.y) < 4) ss.found = false
+    if (ss.found && zn.margin(ss.x, ss.y) < 4) ss.found = false
     if (!ss.found && st.stuckSince < 0) st.stuckSince = bb.t
     if (tgt) {
       const tHp = hpOf(tgt)
       const close = tgt.dist < P.ffaCloseDist && (!ss.found || ss.dist > P.ffaCloseBreak)
       const finishing = tHp < P.ffaFinishHp && bb.hpFrac > 0.45 && nFound <= 1
       const winning = fightRatio(bb, tgt) > P.ffaFightRatio
-      const patience = !ss.found && st.stuckSince >= 0 && bb.t - st.stuckSince > P.ffaBreakPatience && bb.t - bb.tHurt < 1.5
+      const patience = !ss.found && st.stuckSince >= 0 && bb.t - st.stuckSince > P.ffaFleePatience && bb.t - bb.tHurt < 1.5
       const endFight = (hunt && nFound <= 1 && fightRatio(bb, tgt) > 0.8) || bb.obs.alive <= P.ffaDuelAlive
       if ((close && (shooter !== null || tgt.dist < 25)) || finishing || winning || (patience && tgt.dist < 110) || endFight) {
         duelIntent(bb, mv, sc, it, tgt, true)
@@ -426,13 +322,7 @@ export function decideFfaV2(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     st.spotOk = false
     const danger = shooter !== null || unseenHit || (found !== null && found.dist < 100)
     const pace = danger && bb.energy > 20 ? PACE_BOOST : PACE_WALK
-    if (hiddenNow) {
-      // already behind something solid: stand still (moving is what shows us again)
-      it.hold(bb.x, bb.y, bb.z, "covered")
-    } else if (strict && ss.found) {
-      it.flee(ss.x, ss.y, ss.z, pace, "break")
-      it.arrive = 1
-    } else if (ss.found) {
+    if (ss.found) {
       st.brkOk = true
       st.brkX = ss.x
       st.brkY = ss.y
@@ -487,12 +377,8 @@ export function decideFfaV2(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
       if (ok && (!best || hpOf(e) < hpOf(best))) best = e
     }
     if (best) {
-      const final = bb.obs.alive <= P.ffaDuelAlive
-      if ((final ? P.ffaFinalHold : P.ffaThirdHold) > 0) it.fight(best.id, STYLE_HOLD, best.dist, final ? "final" : "third")
-      else {
-        duelIntent(bb, mv, sc, it, best, true)
-        it.label = hunt ? "hunt" : final ? "final" : "third"
-      }
+      duelIntent(bb, mv, sc, it, best, true)
+      it.label = hunt ? "hunt" : "third"
       weaponReflex(bb, it)
       return it
     }
@@ -510,10 +396,7 @@ export function decideFfaV2(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     if (near) {
       const cover = coverOf(bb, mv, st)
       const ss = st.ss
-      if (P.ffaStrictCover > 0) {
-        const keep = st.brkOk && bb.t - st.brkT < P.ffaBreakCommitS && hiddenAt(bb, st, nv, st.brkX, st.brkY, st.brkZ)
-        if (!keep && bb.t - st.brkT >= 0.3) breakPoint(bb, mv, st, nv, P.ffaBreakMaxDist)
-      } else if (cover && bb.t - st.brkT > 0.5) {
+      if (cover && bb.t - st.brkT > 0.5) {
         cover.safeDirection(bb.x, bb.y, bb.z, bb.height, st.views, nv, P.ffaBreakMaxDist, ss)
         if (ss.found && zn.margin(ss.x, ss.y) >= 4) {
           st.brkOk = true
@@ -595,18 +478,14 @@ export function decideFfaV2(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     const items = bb.loot.items
     let bi = -1
     let bs = 0
-    // opening weapon rush: a laser / lightning within ffaRushDist in the first ffaRushS seconds, whatever the exposure
-    const rush = bb.t < P.ffaRushS && bb.freeSlot >= 0
     for (let i = 0; i < items.length; i++) {
       const p = items[i]
       if (p.type !== L_PICKUP && p.type !== L_CUBE) continue
       const d = Math.hypot(p.x - bb.x, p.y - bb.y)
-      const weapon = p.type === L_PICKUP && (p.wk === W_LASER || p.wk === W_LIGHTNING)
-      const rushIt = rush && weapon && d <= P.ffaRushDist
-      if ((d > P.ffaPickupDist && !rushIt) || Math.abs(p.z - bb.z) > 4) continue
-      const v = p.type === L_CUBE ? P.valCube : weapon ? pickupValue(bb, p.wk) : 0
+      if (d > P.ffaPickupDist || Math.abs(p.z - bb.z) > 4) continue
+      const v = p.type === L_CUBE ? P.valCube : p.wk === W_LASER || p.wk === W_LIGHTNING ? pickupValue(bb, p.wk) : 0
       if (v <= 0) continue
-      if (!rushIt && cover.exposureAt(p.x, p.y, p.z) > P.ffaPickupExpo) continue
+      if (cover.exposureAt(p.x, p.y, p.z) > P.ffaPickupExpo) continue
       if (zn.marginAt(p.x, p.y, bb.t + d / bb.walk + 3) < 8) continue
       const s = v - d * 0.2
       if (s > bs) {

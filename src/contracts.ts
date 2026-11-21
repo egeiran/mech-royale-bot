@@ -47,6 +47,8 @@ export interface BotContext {
   /** true in the real match process (wall-clock guards on), false in the simulator */
   realtime: boolean
   log(msg: string): void
+  /** realtime only: wall-clock measurements from the process runner (gaps between our answer and the next observation) */
+  rt?: { gaps: number[]; readyGapMs: number }
 }
 
 export interface Bot {

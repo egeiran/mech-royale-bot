@@ -11,6 +11,14 @@ import { simpleBot } from "../bot/simple.ts"
 const log = (...a: unknown[]) => console.error(...a)
 const send = (o: unknown) => process.stdout.write(JSON.stringify(o) + "\n")
 
+/** Wall-clock measurements the runner shares with the bot (realtime only). */
+export interface RtStats {
+  /** ms from writing our answer to the arrival of the next observation, for the first decisions (no backlog) */
+  gaps: number[]
+  /** ms from writing `ready` to the first observation */
+  readyGapMs: number
+}
+
 export interface RunnerOptions {
   name: string
   factory: BotFactory
@@ -31,6 +39,9 @@ export function runProcess(opts: RunnerOptions) {
   let buf = ""
   let queued = false
   let slow = 0
+  const rt: RtStats = { gaps: [], readyGapMs: -1 }
+  let tSent = -1
+  let tReady = -1
 
   const onHello = (hello: Hello) => {
     const t0 = performance.now()
@@ -48,7 +59,8 @@ export function runProcess(opts: RunnerOptions) {
       rng: makeRng(seed ^ salt),
       realtime: true,
       log: (m: string) => log(m),
-    })
+      rt,
+    } as BotContext)
     try {
       fallback = simpleBot(mk(0x51ab))
     } catch (e) {
@@ -63,6 +75,7 @@ export function runProcess(opts: RunnerOptions) {
     }
     log(`ready in ${(performance.now() - t0).toFixed(0)} ms (world ${world ? "ok" : "none"}, primary ${primary ? "ok" : "none"})`)
     send({ type: "ready", name: opts.name.slice(0, 32) })
+    tReady = performance.now()
   }
 
   const onObs = (obs: Observation) => {
@@ -92,11 +105,14 @@ export function runProcess(opts: RunnerOptions) {
     if (!action) action = { move: last.move, aim: last.aim, boost: last.boost }
     last = action
     send(sanitize(action, obs.tick))
-    const ms = performance.now() - t0
+    tSent = performance.now()
+    const ms = tSent - t0
     if (ms > 25 && ++slow <= 20) log(`slow decision ${ms.toFixed(1)} ms at tick ${obs.tick}`)
   }
 
   const handle = (lines: string[]) => {
+    const tArr = performance.now()
+    let nObs = 0
     let latest: Observation | null = null
     for (const line of lines) {
       let msg: any
@@ -106,15 +122,21 @@ export function runProcess(opts: RunnerOptions) {
         continue
       }
       if (msg.type === "hello") onHello(msg)
-      else if (msg.type === "obs") latest = msg
-      else if (msg.type === "end") {
+      else if (msg.type === "obs") {
+        latest = msg
+        nObs++
+      } else if (msg.type === "end") {
         try {
           primary?.end?.(msg)
         } catch {}
         process.exit(0)
       }
     }
-    if (latest) onObs(latest)
+    if (latest) {
+      if (rt.readyGapMs < 0 && tReady >= 0) rt.readyGapMs = tArr - tReady
+      else if (nObs === 1 && tSent >= 0 && rt.gaps.length < 64) rt.gaps.push(tArr - tSent)
+      onObs(latest)
+    }
   }
 
   const flush = () => {
