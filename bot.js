@@ -8938,10 +8938,10 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// data/tmp/wt/E/src/entries/trunc-60.ts
+// data/tmp/wt/E/src/entries/trunc-100.ts
 var P = { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25 };
 var trunc = (ctx) => {
   const bot = mainBot(ctx);
-  return { name: bot.name, act: (obs) => obs.t >= 60 ? {} : bot.act(obs) };
+  return { name: bot.name, act: (obs) => obs.t >= 100 ? {} : bot.act(obs) };
 };
 runProcess({ name: BOT_NAME, factory: trunc, loadWorld, warmup, params: P });
