@@ -8814,5 +8814,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/pj-survivor.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { ghostKills: 4, upPlating: 130, upArmor: 128 } });
+// src/entries/pj-tempo2.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { seekSoundS: 8, npcFirstDist: 45, squadRegenUntil: 0.7, lootTimeCost: 0.5, dropFightLeadS: 0 } });
