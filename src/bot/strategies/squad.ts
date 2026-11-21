@@ -12,8 +12,9 @@
 import { Track, W_LASER, W_LIGHTNING } from "../perception/tracker.ts"
 import { S_BOOST, S_CRATE, S_GUN, S_JET, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_MORTAR, S_NPC_GUN, S_RELOAD, S_STEP } from "../perception/sounds.ts"
 import { L_PICKUP, MODE_FFA, type Blackboard, type LootItem } from "../brain/blackboard.ts"
-import { FACE_SCAN, FACE_THREATS, PACE_BOOST, PACE_WALK, STYLE_PUSH, STYLE_SPOT, type Intent } from "../brain/intent.ts"
+import { FACE_SCAN, FACE_THREATS, PACE_BOOST, PACE_WALK, STYLE_HOLD, STYLE_PUSH, STYLE_SPOT, type Intent } from "../brain/intent.ts"
 import { newSpot, type Mover } from "../brain/navx.ts"
+import { cellOf, F_STAND, getExposure } from "../cover/exposure.ts"
 import { decideFfa } from "./ffa.ts"
 import {
   bestLoot, duelRange, fightRatio, healUntil, lootIntent, newLootChoice, newZoneGoal, pickTarget, pickupValue, wantDrop, weaponReflex, zoneDuty, zoneIntent,
@@ -50,6 +51,106 @@ export class SquadScratch {
   /** UNKNOWN-phase restraint (openPassiveS) active this decision / a fight branch was taken */
   passive = false
   fought = false
+  /** tempo variants: hunt lead (where to go), sniper post (where to stand, since when, last finished post) */
+  hx = 0
+  hy = 0
+  hz = 0
+  hAge = 0
+  postX = 0
+  postY = 0
+  postZ = 0
+  postOk = false
+  postT = -1e9
+  postArrT = -1
+  postDoneX = 1e9
+  postDoneY = 1e9
+  postDoneT = -1e9
+}
+
+/**
+ * hunt lead: the freshest known mech (age <= 45 s, age + travel time) or else the freshest armed-mech sound within
+ * soundS seconds, into sc.hx/hy/hz (sc.hAge = age of the lead); false when none
+ */
+function huntLead(bb: Blackboard, sc: SquadScratch, soundS: number): boolean {
+  let lead: Track | null = null
+  let ls = 1e9
+  const trs = bb.tracker.mechs
+  for (let i = 0; i < trs.length; i++) {
+    const e = trs[i]
+    if (!e.known || e.dead || e.id === bb.me.id) continue
+    const age = e.age(bb.t)
+    if (age > 45 || bb.zone.margin(e.x, e.y) < 10) continue
+    if (e.dist < 12 && age > 3) continue // been there, nobody home
+    const s = age + e.dist / 12
+    if (s < ls) {
+      ls = s
+      lead = e
+    }
+  }
+  if (lead) {
+    sc.hx = lead.x
+    sc.hy = lead.y
+    sc.hz = lead.z
+    sc.hAge = lead.age(bb.t)
+    return true
+  }
+  if (!soundLead(bb, sc, soundS)) return false
+  sc.hx = sc.sndX
+  sc.hy = sc.sndY
+  sc.hz = bb.world ? bb.world.groundZ(sc.sndX, sc.sndY) : bb.z
+  sc.hAge = 99
+  return true
+}
+
+const POST_RINGS = [0, 0.2, 0.4, 0.6, 0.8, 1]
+const POST_DIRS = 16
+/**
+ * sniper post: the ground spot within P.snipeR with the longest sightlines (static exposure field: share of the
+ * ground within 200 m that has a line to it) inside the next circle, minus a travel cost; into sc.post*.
+ * Re-searched every 2 s (keeps the current post unless a new one is clearly better).
+ */
+function snipeSpot(bb: Blackboard, sc: SquadScratch): boolean {
+  const w = bb.world
+  if (!w) return false
+  if (bb.t - sc.postT < 2) return sc.postOk
+  sc.postT = bb.t
+  const f = getExposure(w)
+  const R = bb.P.snipeR
+  let bs = -1e9
+  let bx = 0, by = 0
+  const curOk = sc.postOk
+  for (let ri = 0; ri < POST_RINGS.length; ri++) {
+    const r = POST_RINGS[ri] * R
+    const nd = r === 0 ? 1 : POST_DIRS
+    for (let k = 0; k < nd; k++) {
+      const a = (k * 2 * Math.PI) / nd
+      const x = bb.x + r * Math.cos(a), y = bb.y + r * Math.sin(a)
+      const c = cellOf(f, x, y)
+      if (!(f.flags[c]! & F_STAND)) continue
+      if (bb.zone.marginNext(x, y) < 20 || bb.zone.marginAt(x, y, bb.t + 20) < 10) continue
+      if (Math.hypot(x - sc.postDoneX, y - sc.postDoneY) < 25 && bb.t - sc.postDoneT < 30) continue
+      if (bb.isBadGoal(x, y)) continue
+      const s = (100 * f.expo[c]!) / 255 - 0.3 * r
+      if (s > bs) {
+        bs = s
+        bx = x
+        by = y
+      }
+    }
+  }
+  if (curOk) {
+    const c = cellOf(f, sc.postX, sc.postY)
+    const cur = (100 * f.expo[c]!) / 255 - 0.3 * Math.hypot(sc.postX - bb.x, sc.postY - bb.y)
+    if (cur + 8 >= bs && bb.zone.marginNext(sc.postX, sc.postY) >= 15) return true
+  }
+  sc.postOk = bs > -1e8
+  if (sc.postOk) {
+    sc.postX = bx
+    sc.postY = by
+    sc.postZ = w.groundZ(bx, by)
+    sc.postArrT = -1
+  }
+  return sc.postOk
 }
 
 /** boost on long trips with nobody in sight (tempo) while energy is plentiful */
@@ -174,14 +275,14 @@ const MECH_SOUND = new Uint8Array(16)
 for (const k of [S_GUN, S_MORTAR, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_CRATE, S_NPC_GUN, S_STEP, S_BOOST, S_JET, S_RELOAD]) MECH_SOUND[k] = 1
 
 /** freshest armed-mech sound inside the zone (age + travel time), into sc.sndX/Y; false when none */
-function soundLead(bb: Blackboard, sc: SquadScratch): boolean {
+function soundLead(bb: Blackboard, sc: SquadScratch, maxAge: number = bb.P.seekSoundS): boolean {
   const s = bb.sounds
   const cap = s.evKind.length
   let bs = 1e9
   for (let k = 0; k < s.evCount; k++) {
     const i = (s.evHead - 1 - k + cap) % cap
     const age = bb.t - s.evT[i]
-    if (age > bb.P.seekSoundS || age < -1) continue
+    if (age > maxAge || age < -1) continue
     if (MECH_SOUND[s.evKind[i]] !== 1) continue
     const x = s.evX[i], y = s.evY[i]
     const d = Math.hypot(x - bb.x, y - bb.y)
@@ -266,6 +367,11 @@ export function duelIntent(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Inte
   }
 
   const range = duelRange(bb, target)
+  // sniper post variant: a laser target beyond the kite band with a clean line is fought from where we stand
+  if (P.snipePost > 0 && bb.mode !== MODE_FFA && bb.haveLaser && !target.npc && bb.los[target.id] === 1 && target.dist > range + P.rangeBand && target.dist <= P.snipeMaxDist) {
+    it.fight(target.id, STYLE_HOLD, range, "snipe")
+    return
+  }
   // finish kills: a nearly dead mech running away (or out of sight) is chased with boost, unless others guard it
   if (P.finishChaseHp > 0 && !target.npc && tHpFrac < P.finishChaseHp) {
     const d = Math.max(0.1, target.dist)
@@ -431,8 +537,10 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     // with a mech on us only when it is (about to be) capturable: walking toward a drop that lands in 20 s
     // turns the duel into a long-range one we lose
     const soonEnough = !target || d.lands_in <= (dist / bb.walk) * 1.3 + P.dropFightLeadS
-    if (soonEnough && (!target || bb.nThreats === 0 || dist < 35 || (bb.hpFrac < 0.75 && dist < 150))) {
-      it.capture(d.pos[0], d.pos[1], d.pos[2], target || dist < 40 ? PACE_WALK : PACE_BOOST, "drop")
+    // refuel variant: hurt -> go for it from far and through a fight (full HP + 3 cubes + energy), arriving as it lands
+    const refuel = P.dropRefuelHp > 0 && bb.hpFrac < P.dropRefuelHp && dist <= P.dropRefuelDist && d.lands_in <= (dist / bb.walk) * 1.3 + 3
+    if (refuel || (soonEnough && (!target || bb.nThreats === 0 || dist < 35 || (bb.hpFrac < 0.75 && dist < 150)))) {
+      it.capture(d.pos[0], d.pos[1], d.pos[2], target || dist < 40 ? PACE_WALK : PACE_BOOST, refuel ? "refuel" : "drop")
       it.face = FACE_THREATS
       if (target) it.targetId = target.id
       weaponReflex(bb, it)
@@ -519,6 +627,55 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     if (!target) it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
     weaponReflex(bb, it)
     return it
+  }
+
+  // 5''. tempo variants (nobody engaged, HP >= seekHp, no zone duty): no NPC / crate farming and no far loot;
+  // "hunt" goes for the next known / heard mech with boost, "sniper post" (laser) stands where it sees far
+  const post = P.snipePost > 0 && bb.haveLaser
+  if ((P.tempoHunt > 0 || post) && zl < 1 && !sc.passive && bb.hpFrac >= P.seekHp) {
+    // cubes and wanted weapons close by first (silent; kills drop cubes + 2)
+    if (bestLoot(bb, true, P.tempoHuntLoot, sc.lc) && sc.lc.item) {
+      lootIntent(bb, sc.lc, it, PACE_WALK)
+      it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
+      if (target) it.targetId = target.id
+      it.label = "tloot"
+      weaponReflex(bb, it)
+      return it
+    }
+    if (post) {
+      // at the post: hold and scan; after 10 s there with nobody seen, mark it done (next post > 25 m away)
+      if (snipeSpot(bb, sc)) {
+        const d = Math.hypot(sc.postX - bb.x, sc.postY - bb.y)
+        if (d < 3 && sc.postArrT < 0) sc.postArrT = bb.t
+        const waited = sc.postArrT >= 0 ? bb.t - Math.max(sc.postArrT, bb.tEnemySeen) : 0
+        if (waited > 10) {
+          sc.postDoneX = sc.postX
+          sc.postDoneY = sc.postY
+          sc.postDoneT = bb.t
+          sc.postOk = false
+          sc.postT = -1e9
+        } else {
+          if (d >= 3) it.goto(sc.postX, sc.postY, sc.postZ, d > 30 && bb.energy > 70 ? PACE_BOOST : PACE_WALK, "post")
+          else it.hold(sc.postX, sc.postY, sc.postZ, "overlook")
+          it.arrive = 2
+          it.allowJet = false
+          it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
+          if (target) it.targetId = target.id
+          weaponReflex(bb, it)
+          return it
+        }
+      }
+    }
+    if (P.tempoHunt > 0 && huntLead(bb, sc, P.tempoHuntSoundS)) {
+      const d = Math.hypot(sc.hx - bb.x, sc.hy - bb.y)
+      it.goto(sc.hx, sc.hy, sc.hz, d > 25 && bb.energy > P.tempoHuntEnergy ? PACE_BOOST : PACE_WALK, sc.hAge < 90 ? "hunt" : "hhear")
+      it.arrive = 6
+      it.allowJet = false
+      it.face = sc.hAge < 6 ? FACE_THREATS : FACE_SCAN
+      if (target) it.targetId = target.id
+      weaponReflex(bb, it)
+      return it
+    }
   }
 
   // 5. loot

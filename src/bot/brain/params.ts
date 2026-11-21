@@ -153,6 +153,25 @@ export const DEFAULTS = {
   finishChaseHp: 0,
   finishChaseRange: 25,
   finishChaseCrowd: 2,
+  // ---- tempo variants (tempo agent, 2026-11-21 late; data/tmp/tempo; all off by default)
+  /** SQUAD "hunt" (1 = on): nobody engaged, HP >= seekHp, a mech known (age <= 45 s) or heard (<= tempoHuntSoundS):
+   *  go there at once with boost (energy > tempoHuntEnergy) instead of farming NPCs / crates / far loot; only cubes and
+   *  wanted weapons within tempoHuntLoot m are still taken first */
+  tempoHunt: 0,
+  tempoHuntLoot: 40,
+  tempoHuntSoundS: 20,
+  tempoHuntEnergy: 40,
+  /** SQUAD "sniper post" (1 = on, needs a laser): nobody in sight -> stand on the most open ground spot (cover
+   *  exposure field: long sightlines) within snipeR m inside the next circle and scan from there (no NPC / crate
+   *  farming, cubes / weapons within tempoHuntLoot still taken); a laser target beyond the kite band with a clean
+   *  line and within snipeMaxDist is fought from where we stand (no approach walk) */
+  snipePost: 0,
+  snipeR: 60,
+  snipeMaxDist: 200,
+  /** SQUAD "drop refuel": below this HP fraction go for a reachable supply drop (full HP + 3 cubes + energy) even
+   *  in a fight, from up to dropRefuelDist m, shooting on the way and from inside the ring (0 = off) */
+  dropRefuelHp: 0,
+  dropRefuelDist: 400,
   /** gun only (no laser, no lightning): preferred duel distance against every mech, whatever it carries (0 = off;
    *  the range* keys apply). Real: <25 m 145/195 dealt/taken HP/s, 25-45 m 83/79, 45-65 m 88/64, 65-85 m 33/20 */
   rangeGunOnly: 0,
