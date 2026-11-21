@@ -42,6 +42,26 @@ stray bullets do kill squad mates, so one death proves nothing). Otherwise **SQU
   only while hurt); 6 healthy (`seekHp`) and alone -> walk to the freshest known enemy position; 7 explore.
 - **FFA** (`decideFfa`, owned by the FFA agent - see ffa.ts): ghost first, duelist (`duelIntent`) as fallback.
 
+## Style 1 "laser kite" (`style: 1`, squad agent, 2026-11-21 evening)
+`params.ts STYLE_LASER_KITE` is applied under the explicit params when `style` is 1 (data/intel/teams.md: top bots
+carry a laser and fight at 60-90 m backing off; house guns hit 32 % there, house lasers ~20 %): laser first
+(`valLaser`, `valSwapToLaser` swaps lightning out), `rangeLaser`/`rangeGun` 75 m with `rangeBand` 10 and a boost to
+re-open inside 45 m, `laserKeepGun` (gun keeps firing during the charge), `peekMargin` (fight from a point only the
+target sees), break-off at 70 % HP (`squadDisengage*`, `squadHealUntil`), no mid-fight looting within 6 m but kill
+cubes / weapons collected while every visible mech is >= `lootClearDist` from them. Lightning without a laser keeps
+the 14 m duel. Sim log: data/tmp/squad/log.md.
+
+**Laser release fix (default):** on the release decision the aim command now is the aim the release gate checked.
+Before, the gun lead stayed commanded and beams left 2-5 deg off (our laser hit ~33 %, now ~90-100 %).
+`laserLegacyRelease: 1` restores the bug (calibration anchors only).
+
+Other squad params added (default off unless noted): `seekSoundS` (walk to the freshest armed-mech sound),
+`npcFirstDist` (kill an NPC that shoots us mid-duel first), `dropFightLeadS`, `peekMargin`/`peekEvery`,
+`mortarFire` (flat-arc mortar use), `ghostT`/`ghostKills`/`ghostOnUs`/`ghostHealHp` (play the FFA ghost; all lost in
+sim and the real ghostKills 4 probe), `ambushDist` (bad), `targetDpsW`, `engageHurtDist`, `duelLtgDist`,
+`squadHealUntil`/`squadLootTimeCost` (squad-mode-only overrides), `idleHold`, `crateLaserW`, `boostTravelDist`
+(now wired). `eval.ts --trace <dir>` writes per-decision JSONL for data/tmp/squad/trace_an.py.
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,

@@ -10,6 +10,7 @@
  * stuck episodes, decision time. --baseline runs simpleBot in the same seat on the same seeds for comparison.
  */
 import type { Bot, BotAction, BotContext, BotFactory, MatchEntry, Observation } from "../../contracts.ts"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { loadWorld } from "../../world/index.ts"
 import { runMatch } from "../../sim/index.ts"
 import { simpleBot } from "../simple.ts"
@@ -41,6 +42,8 @@ const timelineSeed = parseInt(arg("timeline", "-1"), 10)
 const quiet = flag("quiet")
 const tlEvery = parseInt(arg("tlEvery", "40"), 10)
 const replayDir = arg("replay", "")
+/** --trace <dir>: one JSONL per match with our bot's per-decision state + events (for data/tmp/squad analysis) */
+const traceDir = arg("trace", "")
 if (mode === "squad") params.forceMode = 1
 else if (mode === "ffa") params.forceMode = 2
 
@@ -78,6 +81,7 @@ if (opp === "squad") {
 const world = loadWorld(new URL("../../../mechfight-kit/arena", import.meta.url).pathname)
 
 interface Probe {
+  trace: string[] | null
   dmg: { t: number; amount: number; weapon: string; by: number | null }[]
   lastLabel: string
   lastMode: number
@@ -93,13 +97,15 @@ interface Probe {
   seenBy: number
   stuckSeen: number
   ltgT: number
+  ltgSeenT: number
+  ltgSeenD: number
   lasT: number
 }
 
 let curDirector: DirectorLike | null = null
 
 function probed(seed: number, tl: boolean): { factory: BotFactory; probe: Probe } {
-  const probe: Probe = { dmg: [], lastLabel: "", lastMode: 0, lastHp: 0, lastT: 0, labels: new Map(), ms: [], errors: 0, firstError: "", brain: null, maxCubes: 0, weapons: "", seenBy: 0, stuckSeen: 0, ltgT: -1, lasT: -1 }
+  const probe: Probe = { trace: traceDir ? [] : null, dmg: [], lastLabel: "", lastMode: 0, lastHp: 0, lastT: 0, labels: new Map(), ms: [], errors: 0, firstError: "", brain: null, maxCubes: 0, weapons: "", seenBy: 0, stuckSeen: 0, ltgT: -1, ltgSeenT: -1, ltgSeenD: -1, lasT: -1 }
   const factory: BotFactory = (ctx: BotContext): Bot => {
     const b = createBrain(ctx)
     probe.brain = b
@@ -131,8 +137,46 @@ function probed(seed: number, tl: boolean): { factory: BotFactory; probe: Probe 
         probe.weapons = obs.self.weapons.map((w) => (w ? w.kind : "-")).join("+")
         if (b.bb.nSeeing > 0) probe.seenBy++
         if (probe.ltgT < 0 && b.bb.haveLightning) probe.ltgT = obs.t
+        if (probe.ltgSeenT < 0) {
+          for (const p of obs.pickups) if (p.kind === (params.style === 1 ? "laser" : "lightning")) {
+            probe.ltgSeenT = obs.t
+            probe.ltgSeenD = Math.hypot(p.pos[0] - obs.self.pos[0], p.pos[1] - obs.self.pos[1])
+          }
+        }
         if (probe.lasT < 0 && b.bb.haveLaser) probe.lasT = obs.t
         probe.labels.set(it.label, (probe.labels.get(it.label) ?? 0) + 1)
+        if (probe.trace) {
+          const bb = b.bb
+          const on: number[] = []
+          const vis: number[] = []
+          for (let i = 0; i < bb.nEn; i++) {
+            const e = bb.en[i]!
+            vis.push(e.id, Math.round(e.dist))
+            if (obs.t - e.tShotAtUs < 3 || (e.aimingAtUs && bb.los[e.id] === 1)) on.push(e.id)
+          }
+          const ev: unknown[] = []
+          for (const e of obs.events) {
+            if (e.type === "damaged") ev.push(["d", e.by, Math.round(e.amount), e.weapon])
+            else if (e.type === "hit") ev.push(["h", e.target, Math.round(e.amount), e.weapon])
+            else if (e.type === "kill") ev.push(["k", e.target])
+            else if (e.type === "drop") ev.push(["D"])
+          }
+          const ws = obs.self.weapons
+          const las = bb.las
+          probe.trace.push(JSON.stringify({
+            t: obs.t, hp: Math.round(obs.self.hp), mx: Math.round(obs.self.max_hp), c: obs.self.cubes,
+            w: ws.map((w) => (w ? (w.kind === "lightning" ? "z" : w.kind === "laser" ? "a" : w.kind[0]) : "-")).join(""), l: it.label, tg: it.targetId,
+            on, vis, x: Math.round(bb.x), y: Math.round(bb.y), ev,
+            dr: obs.drops.map((d) => [Math.round(d.pos[0]), Math.round(d.pos[1]), Math.round(d.lands_in * 10) / 10, d.holder, Math.round(d.progress * 10) / 10]),
+            f: a.fire ? (a.fire[0] ? 1 : 0) + (a.fire[1] ? 2 : 0) : 0,
+            lc: las ? Math.round((las.charge ?? 0) * 100) / 100 : -1, lcd: las ? Math.round(las.cooldown * 100) / 100 : -1,
+            zm: Math.round(bb.zone.margin(bb.x, bb.y)), e: Math.round(obs.self.energy),
+            ...(las && (las.charge ?? 0) > 0 ? (() => {
+              const tr = it.targetId >= 0 ? bb.tracker.get(it.targetId) : null
+              return { ay: obs.self.aim, ca: a.aim, tp: tr ? [tr.x, tr.y, tr.z, tr.vx, tr.vy, tr.vz, tr.radius, tr.height, tr.visible ? 1 : 0] : null, me: [obs.self.pos, obs.self.vel], lfs: a.fire ? a.fire[bb.lasSlot] : false, ls: bb.lasSlot, wf: it.weaponsFree }
+            })() : {}),
+          }))
+        }
         if (tl && obs.tick % tlEvery === 0) {
           const bb = b.bb
           console.log(
@@ -186,8 +230,9 @@ function oppEntry(i: number): MatchEntry {
 
 function runSet(label: string, ours: ((seed: number) => { factory: BotFactory; probe: Probe | null })): { mean: number } {
   let sumScore = 0, sumKills = 0, sumT = 0, errs = 0, stuck = 0, slow = 0, dec = 0, oppErrs = 0, wins = 0
-  let nLtg = 0, sumLtgT = 0, nLas = 0, sumCubes = 0
+  let nLtg = 0, sumLtgT = 0, nLas = 0, sumCubes = 0, nLtgSeen = 0, sumLtgSeenT = 0, sumLtgSeenD = 0
   const causes = new Map<string, number>()
+  const allLabels = new Map<string, number>()
   const allMs: number[] = []
   const scores: number[] = []
   const t00 = performance.now()
@@ -201,6 +246,11 @@ function runSet(label: string, ours: ((seed: number) => { factory: BotFactory; p
     const res = runMatch({ seed, entries, world, replayPath: replayDir && probe ? `${replayDir}/${label}-${seed}.jsonl.gz` : undefined })
     const place = res.place[seat]!
     const score = 16 - place
+    if (probe && probe.trace) {
+      mkdirSync(traceDir, { recursive: true })
+      const head = JSON.stringify({ seed, seat, names: entries.map((e) => e.name), place, kills: res.kills[seat], diedAt: res.diedAt[seat], diedAll: res.diedAt, dur: res.durationS })
+      writeFileSync(`${traceDir}/m${seed}.jsonl`, head + "\n" + probe.trace.join("\n") + "\n")
+    }
     scores.push(score)
     sumScore += score
     sumKills += res.kills[seat]!
@@ -213,8 +263,10 @@ function runSet(label: string, ours: ((seed: number) => { factory: BotFactory; p
       if (place !== 1) c = cause(probe)
       for (const m of probe.ms) allMs.push(m)
       if (probe.ltgT >= 0) ((nLtg++), (sumLtgT += probe.ltgT))
+      if (probe.ltgSeenT >= 0) ((nLtgSeen++), (sumLtgSeenT += probe.ltgSeenT), (sumLtgSeenD += probe.ltgSeenD))
       if (probe.lasT >= 0) nLas++
       sumCubes += probe.maxCubes
+      for (const [l, n] of probe.labels) allLabels.set(l, (allLabels.get(l) ?? 0) + n)
       const st = probe.brain!.exec.stats
       stuck += st.stuckEpisodes
       slow += st.slow
@@ -223,7 +275,7 @@ function runSet(label: string, ours: ((seed: number) => { factory: BotFactory; p
     }
     causes.set(c, (causes.get(c) ?? 0) + 1)
     if (!quiet) {
-      const extra = probe ? ` cause=${c.padEnd(12)} last=${probe.lastLabel.padEnd(9)} mode=${MODE_NAMES[probe.lastMode]} cubes=${probe.maxCubes} w=${probe.weapons} seen=${((100 * probe.seenBy) / Math.max(1, probe.ms.length)).toFixed(0)}% stuck=${probe.brain!.exec.stats.stuckEpisodes}` : ""
+      const extra = probe ? ` cause=${c.padEnd(12)} last=${probe.lastLabel.padEnd(9)} mode=${MODE_NAMES[probe.lastMode]} cubes=${probe.maxCubes} w=${probe.weapons} seen=${((100 * probe.seenBy) / Math.max(1, probe.ms.length)).toFixed(0)}% stuck=${probe.brain!.exec.stats.stuckEpisodes} ltgSeen=${probe.ltgSeenT >= 0 ? probe.ltgSeenT.toFixed(0) + "s@" + probe.ltgSeenD.toFixed(0) + "m" : "-"} ltgT=${probe.ltgT >= 0 ? probe.ltgT.toFixed(0) : "-"}` : ""
       console.log(`${label} seed ${String(seed).padStart(3)} seat ${String(seat).padStart(2)}: place ${String(place).padStart(2)} score ${String(score).padStart(2)} kills ${res.kills[seat]} died ${res.diedAt[seat]!.toFixed(0).padStart(3)}/${res.durationS.toFixed(0)} dmg ${res.dmgDealt[seat]!.toFixed(0)}/${res.dmgTaken[seat]!.toFixed(0)}${extra}`)
     }
   }
@@ -232,7 +284,11 @@ function runSet(label: string, ours: ((seed: number) => { factory: BotFactory; p
   allMs.sort((a, b) => a - b)
   const pct = (q: number) => (allMs.length ? allMs[Math.min(allMs.length - 1, Math.floor(q * allMs.length))]!.toFixed(2) : "-")
   console.log(`== ${label}: mean score ${mean.toFixed(2)} +- ${(sd / Math.sqrt(nSeeds)).toFixed(2)} (n=${nSeeds}) wins ${wins} kills ${(sumKills / nSeeds).toFixed(2)} survive ${(sumT / nSeeds).toFixed(0)} s | exceptions ${errs} (opp ${oppErrs}) | stuck episodes ${stuck}, slow decisions ${slow}/${dec} | ms p50 ${pct(0.5)} p99 ${pct(0.99)} max ${pct(1)} | ${((performance.now() - t00) / nSeeds).toFixed(0)} ms/match`)
+  console.log(`   lightning pickup ever seen in ${nLtgSeen}/${nSeeds} (first seen mean t=${(sumLtgSeenT / Math.max(1, nLtgSeen)).toFixed(0)} s at ${(sumLtgSeenD / Math.max(1, nLtgSeen)).toFixed(0)} m)`)
   console.log(`   loadout: lightning in ${nLtg}/${nSeeds} (mean t=${(sumLtgT / Math.max(1, nLtg)).toFixed(0)} s), laser in ${nLas}/${nSeeds}, max cubes mean ${(sumCubes / nSeeds).toFixed(1)}`)
+  let nLab = 0
+  for (const v of allLabels.values()) nLab += v
+  console.log(`   time share by intent: ${[...allLabels].sort((a, b) => b[1] - a[1]).map(([l, n]) => `${l} ${((100 * n) / Math.max(1, nLab)).toFixed(0)}%`).join(" ")} (${(nLab / 10 / nSeeds).toFixed(0)} s/match)`)
   console.log(`   causes: ${[...causes].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c}=${n}`).join(" ")}`)
   return { mean }
 }
