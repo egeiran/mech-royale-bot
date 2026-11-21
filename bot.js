@@ -8373,5 +8373,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// data/tmp/wt/5ac412c/src/entries/pj-jump.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { fightJumpRate: 3 } });
+// data/tmp/wt/5ac412c/src/entries/pj-laser.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, params: { valLaser: 50, valLightning: 25, valSwapToLightning: 0 } });
