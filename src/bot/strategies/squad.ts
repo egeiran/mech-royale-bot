@@ -33,6 +33,12 @@ export class SquadScratch {
   /** kills so far (kill events) and the latched "survivor" mode (play the ghost to outlast the squad) */
   kills = 0
   ghost = false
+  /** laser hunt: seen map cells (50 m) and the current exploration goal */
+  exSeen: Uint8Array | null = null
+  exX = 0
+  exY = 0
+  exT = -1e9
+  exOk = false
   wpn: LootItem | null = null
   ghostHeal = false
   /** peek spot (fight several mechs from a point only the target has a line to) */
@@ -76,6 +82,47 @@ function lootIsClear(bb: Blackboard, item: LootItem, clear: number): boolean {
   return true
 }
 
+const EX_CELL = 50
+/** mark the cells around us as seen; pick the nearest unseen cell centre inside the next circle (into sc.exX/Y) */
+function exploreUnseen(bb: Blackboard, sc: SquadScratch): boolean {
+  const w = bb.world
+  if (!w) return false
+  const b = w.bounds
+  const nx = Math.ceil((b.maxX - b.minX) / EX_CELL), ny = Math.ceil((b.maxY - b.minY) / EX_CELL)
+  if (!sc.exSeen || sc.exSeen.length !== nx * ny) sc.exSeen = new Uint8Array(nx * ny)
+  const seen = sc.exSeen
+  const r = bb.P.laserHuntSeenR
+  const i0 = Math.max(0, Math.floor((bb.x - r - b.minX) / EX_CELL)), i1 = Math.min(nx - 1, Math.floor((bb.x + r - b.minX) / EX_CELL))
+  const j0 = Math.max(0, Math.floor((bb.y - r - b.minY) / EX_CELL)), j1 = Math.min(ny - 1, Math.floor((bb.y + r - b.minY) / EX_CELL))
+  for (let j = j0; j <= j1; j++)
+    for (let i = i0; i <= i1; i++) {
+      const cx = b.minX + (i + 0.5) * EX_CELL, cy = b.minY + (j + 0.5) * EX_CELL
+      if (Math.hypot(cx - bb.x, cy - bb.y) < r) seen[j * nx + i] = 1
+    }
+  // keep the current goal while it is unseen
+  if (sc.exOk) {
+    const ci = Math.floor((sc.exX - b.minX) / EX_CELL), cj = Math.floor((sc.exY - b.minY) / EX_CELL)
+    if (seen[cj * nx + ci] === 0 && bb.t - sc.exT < 30) return true
+  }
+  let bd = 1e9
+  sc.exOk = false
+  for (let j = 0; j < ny; j++)
+    for (let i = 0; i < nx; i++) {
+      if (seen[j * nx + i]) continue
+      const cx = b.minX + (i + 0.5) * EX_CELL, cy = b.minY + (j + 0.5) * EX_CELL
+      if (bb.zone.marginNext(cx, cy) < 15) continue
+      const d = Math.hypot(cx - bb.x, cy - bb.y)
+      if (d < bd) {
+        bd = d
+        sc.exX = cx
+        sc.exY = cy
+        sc.exOk = true
+      }
+    }
+  if (sc.exOk) sc.exT = bb.t
+  return sc.exOk
+}
+
 /** sound kinds that mean "an armed mech is (or just was) there" */
 const MECH_SOUND = new Uint8Array(16)
 for (const k of [S_GUN, S_MORTAR, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_CRATE, S_NPC_GUN, S_STEP, S_BOOST, S_JET, S_RELOAD]) MECH_SOUND[k] = 1
@@ -93,7 +140,9 @@ function soundLead(bb: Blackboard, sc: SquadScratch): boolean {
     const x = s.evX[i], y = s.evY[i]
     const d = Math.hypot(x - bb.x, y - bb.y)
     if (d < 20 || bb.zone.margin(x, y) < 10) continue
-    const sc2 = age + d / 12
+    let sc2 = age + d / 12
+    // without a laser, laser carriers are the best kills (they drop it)
+    if (bb.P.seekLaserBonus > 0 && !bb.haveLaser && (s.evKind[i] === S_LASER || s.evKind[i] === S_LASER_CHARGE)) sc2 -= bb.P.seekLaserBonus
     if (sc2 < bs) {
       bs = sc2
       sc.sndX = x
@@ -313,7 +362,7 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
       return it
     }
     // kill cubes / weapons further away, collected while every visible mech stays clear of them (kite style)
-    if (P.lootClearDist > 0 && bestLoot(bb, true, P.lootClearMax, sc.lc) && sc.lc.item && lootIsClear(bb, sc.lc.item, P.lootClearDist)) {
+    if (P.lootClearDist > 0 && bestLoot(bb, true, P.lootClearMax, sc.lc) && sc.lc.item && lootIsClear(bb, sc.lc.item, sc.lc.item.type === L_PICKUP && P.lootClearWpn > 0 ? P.lootClearWpn : P.lootClearDist)) {
       lootIntent(bb, sc.lc, it, PACE_WALK)
       it.targetId = target.id
       it.face = FACE_THREATS
@@ -370,6 +419,16 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     return it
   }
 
+  // 6''. laser hunt: no laser yet -> walk to the nearest area we have not seen yet (pickups are only listed while
+  // in sight), scanning; seen pickups / crates are then taken by the loot step above
+  if (P.laserHunt > 0 && !bb.haveLaser && bb.t < P.laserHuntUntil && exploreUnseen(bb, sc)) {
+    it.goto(sc.exX, sc.exY, bb.world ? bb.world.groundZ(sc.exX, sc.exY) : bb.z, PACE_WALK, "lhunt")
+    it.arrive = 8
+    it.allowJet = false
+    it.face = FACE_SCAN
+    weaponReflex(bb, it)
+    return it
+  }
   // 6'. camp: with nothing to loot, stand and scan (hunters walk into our laser range; top bots wait 35-52 %)
   if (P.idleHold > 0 && bb.zone.marginNext(bb.x, bb.y) > 15) {
     it.hold(bb.x, bb.y, bb.z, "camp")

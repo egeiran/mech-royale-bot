@@ -111,6 +111,8 @@ export function pickTarget(bb: Blackboard): Track | null {
     if (bb.P.targetDpsW > 0 && bb.los[e.id] === 1) s -= (bb.P.targetDpsW * theirDps(bb, e, e.dist)) / 100
     if (bb.los[e.id] !== 1) s += 6
     if (e.aimingAtUs) s -= 1.5
+    // without a laser: a laser carrier drops it when it dies
+    if (bb.P.targetLaserBonus > 0 && !bb.haveLaser && (e.weapons & W_LASER) !== 0) s -= bb.P.targetLaserBonus
     if (bb.t - e.tShotAtUs < 3) s -= 1.5
     if (e.id === m.targetId && bb.t - m.targetT < 1) s -= 2.5
     if (s < bs) {

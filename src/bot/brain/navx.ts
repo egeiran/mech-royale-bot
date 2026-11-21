@@ -337,7 +337,7 @@ export class Mover {
     let best = 1e9
     const base = bb.rng.next() * TAU
     for (let ring = 0; ring < 4; ring++) {
-      const r = ring === 0 ? 0 : ring === 1 ? 5 : ring === 2 ? 9 : 14
+      const r = (ring === 0 ? 0 : ring === 1 ? 5 : ring === 2 ? 9 : 14) * bb.P.peekScale
       const nk = ring === 0 ? 1 : 12
       for (let k = 0; k < nk; k++) {
         const a = base + (k * TAU) / nk

@@ -57,12 +57,23 @@ export const DEFAULTS = {
    *  lootClearDist m from the item (0 = off) */
   lootClearDist: 0,
   lootClearMax: 90,
+  /** ... clearance used for weapon pickups instead (0 = lootClearDist) */
+  lootClearWpn: 0,
+  /** without a laser: seconds of sound-lead score credited to laser sounds (0 = off) */
+  seekLaserBonus: 0,
+  /** without a laser: seconds of time-to-kill credited to a target that holds a laser (0 = off) */
+  targetLaserBonus: 0,
   /** in a duel, go for a known ground-level lightning pickup within this distance (0 = off) */
   duelLtgDist: 0,
   /** ... and for a laser (when we hold none) within this distance (0 = off) */
   duelLaserDist: 0,
   /** SQUAD: with at least this HP fraction and nobody in sight, go and look for the next mech */
   seekHp: 0.6,
+  /** SQUAD laser hunt (1 = on): without a laser and before laserHuntUntil s, with nothing to fight or loot, walk to
+   *  the nearest map area (50 m cells) not yet within laserHuntSeenR m of us, scanning (instead of seek / explore) */
+  laserHunt: 0,
+  laserHuntUntil: 150,
+  laserHuntSeenR: 90,
   /** SQUAD: nothing to loot and nobody in sight -> hold position and scan instead of seeking / exploring (1) */
   idleHold: 0,
   /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
@@ -78,6 +89,8 @@ export const DEFAULTS = {
   peekMargin: 0,
   /** re-evaluate the peek spot every this many seconds */
   peekEvery: 0.5,
+  /** scale of the peek search rings (5 / 9 / 14 m at 1) */
+  peekScale: 1,
   /** SQUAD: an NPC drone shooting us from within this distance during a mech duel is killed first (when it is
    *  closer than the mech, the mech is beyond 30 m, or the drone is nearly dead). 0 = off */
   npcFirstDist: 0,
