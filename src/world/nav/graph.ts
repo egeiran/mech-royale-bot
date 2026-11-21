@@ -12,7 +12,7 @@ export interface MechNavParams {
   boostSpeed: number
   gravity: number
   jumpSpeed: number
-  /** vertical rise speed cap under jets */
+  /** effective climb rate under jets (max_rise_speed minus one tick of gravity: 10 - 22*0.05) */
   maxRiseSpeed: number
   jetDrain: number
   maxEnergy: number
@@ -28,7 +28,7 @@ export interface MechNavParams {
   heuristicWeight: number
   /** a node is usable when its wall clearance >= radius - clearanceSlack */
   clearanceSlack: number
-  /** jet energy model: jetEnergyBase + jetEnergyPerM * max(0, dz - jumpFree) */
+  /** jet energy model: jetEnergyBase + jetEnergyPerM * max(0, dz - jumpFree); perM = jet_drain / climb rate */
   jetEnergyBase: number
   jetEnergyPerM: number
   /** seconds of path cost charged per unit of jet energy */
@@ -44,18 +44,18 @@ export const DEFAULT_PARAMS: MechNavParams = {
   boostSpeed: 19.5,
   gravity: 22,
   jumpSpeed: 11,
-  maxRiseSpeed: 10,
+  maxRiseSpeed: 8.9,
   jetDrain: 15,
   maxEnergy: 100,
   stepUp: 1.2,
   maxSlopeDeg: 50,
   dt: 0.1,
   cell: 2,
-  maxExpansions: 60000,
+  maxExpansions: 50000,
   heuristicWeight: 1.2,
-  clearanceSlack: 0.25,
-  jetEnergyBase: 10,
-  jetEnergyPerM: 1.5,
+  clearanceSlack: 0,
+  jetEnergyBase: 8,
+  jetEnergyPerM: 1.7,
   jetEnergyCost: 0.03,
   maxClimb: 64,
 }
@@ -107,6 +107,8 @@ export interface Graph {
   xTo: Int32Array
   xType: Uint8Array
   xLen: Float32Array
+  /** corridor clearance of a long edge at rim height (same units as clr): side walls the body must pass between */
+  xClr: Uint8Array
   buildMs: number
 }
 
@@ -315,8 +317,17 @@ export function buildGraph(world: World, p: MechNavParams): Graph {
           if (dz > allow + 0.05) continue
           // midpoint check: each half must respect the slope limit going up
           const mz = world.groundZ(ax + DX[d]! * cs * 0.5, ay + DY[d]! * cs * 0.5)
-          const half = allow * 0.5 + 0.15
-          const upOk = mz - za <= half && nz[v]! - mz <= half
+          const half = allow * 0.5 + 0.1
+          const r1 = mz - za
+          const r2 = nz[v]! - mz
+          let upOk = r1 <= half && r2 <= half
+          if (upOk && (r1 > half * 0.5 || r2 > half * 0.5)) {
+            // moderately steep: the server tests the slope per tick (~0.6 m), so look at quarter steps too
+            const q1 = world.groundZ(ax + DX[d]! * cs * 0.25, ay + DY[d]! * cs * 0.25)
+            const q3 = world.groundZ(ax + DX[d]! * cs * 0.75, ay + DY[d]! * cs * 0.75)
+            const quarter = allow * 0.25 + 0.05
+            upOk = q1 - za <= quarter && mz - q1 <= quarter && q3 - mz <= quarter && nz[v]! - q3 <= quarter
+          }
           if (dz >= 0) {
             if (!upOk) continue
             target = v
@@ -328,6 +339,14 @@ export function buildGraph(world: World, p: MechNavParams): Graph {
           break
         }
         if (dz > stepUp + 0.01) continue
+        if (dz > 0.3 && kind[v] === K_GROUND) {
+          // stepping up from a prism top onto terrain: the terrain part of the way obeys the slope limit
+          // (terrain pokes through prism tops around the stadium rim)
+          const mz = world.groundZ(ax + DX[d]! * cs * 0.5, ay + DY[d]! * cs * 0.5)
+          const q3 = world.groundZ(ax + DX[d]! * cs * 0.75, ay + DY[d]! * cs * 0.75)
+          const quarter = allow * 0.25 + 0.05
+          if (nz[v]! - q3 > quarter || (mz > za && q3 - mz > quarter)) continue
+        }
         target = v
         type = dz < -stepUp ? E_DROP : E_WALK
         break
@@ -354,8 +373,9 @@ export function buildGraph(world: World, p: MechNavParams): Graph {
   let pTo = new Int32Array(pcap)
   let pType = new Uint8Array(pcap)
   let pLen = new Float32Array(pcap)
+  let pClr = new Uint8Array(pcap)
   let np = 0
-  const push = (from: number, to: number, type: number, len: number) => {
+  const push = (from: number, to: number, type: number, len: number, cc: number) => {
     if (np === pcap) {
       pcap *= 2
       const a = new Int32Array(pcap)
@@ -370,14 +390,32 @@ export function buildGraph(world: World, p: MechNavParams): Graph {
       const d2 = new Float32Array(pcap)
       d2.set(pLen)
       pLen = d2
+      const e2 = new Uint8Array(pcap)
+      e2.set(pClr)
+      pClr = e2
     }
     pFrom[np] = from
     pTo[np] = to
     pType[np] = type
     pLen[np] = len
+    pClr[np] = cc
     np++
   }
   const H0 = p.height
+  // nearest cell (quantised distance) around raster cell (ci, cj) with a span crossing the body range at feet height z
+  const HC = p.height * 1.25
+  const levelClear = (ci: number, cj: number, z: number): number => {
+    for (let o = 0; o < no; o++) {
+      const i = ci + offI[o]!
+      const j = cj + offJ[o]!
+      if (i < iLo || i > iHi || j < jLo || j > jHi) return offQ[o]!
+      const c = j * nx + i
+      for (let k = spanStart[c]!, e = spanStart[c + 1]!; k < e; k++) {
+        if (spanData[2 * k + 1]! > z + 0.3 && spanData[2 * k]! < z + HC) return offQ[o]!
+      }
+    }
+    return 255
+  }
   for (let r = 0; r < n; r++) {
     if (kind[r] !== K_TOP) continue
     const I = nI[r]!
@@ -389,6 +427,7 @@ export function buildGraph(world: World, p: MechNavParams): Graph {
       if (t1 === E_WALK || t1 === E_JET) continue
       const diag = (d & 1) === 1
       const K = diag ? 3 : 4
+      let cc = 255
       for (let k = 1; k <= K; k++) {
         const I2 = I + DX[d]! * k
         const J2 = J + DY[d]! * k
@@ -413,26 +452,53 @@ export function buildGraph(world: World, p: MechNavParams): Graph {
         if (sNode < 0) break
         const dz = zr - nz[sNode]!
         if (dz <= stepUp) break
+        const lc = levelClear(I2 * cs, J2 * cs, zr)
+        if (lc < cc) cc = lc
         if (k < 2) continue
         const len = k * cs * (diag ? Math.SQRT2 : 1)
-        push(r, sNode, E_DROP, len)
-        if (dz <= p.maxClimb) push(sNode, r, E_JET, len)
+        push(r, sNode, E_DROP, len, cc)
+        if (dz <= p.maxClimb) push(sNode, r, E_JET, len, cc)
       }
     }
   }
   const xStart = new Int32Array(n + 1)
-  for (let e = 0; e < np; e++) xStart[pFrom[e]! + 1]!++
-  for (let u = 0; u < n; u++) xStart[u + 1]! += xStart[u]!
+  for (let e = 0; e < np; e++) xStart[pFrom[e]! + 1] = xStart[pFrom[e]! + 1]! + 1
+  for (let u = 0; u < n; u++) xStart[u + 1] = xStart[u + 1]! + xStart[u]!
   const fill = xStart.slice(0, n)
   const xTo = new Int32Array(np)
   const xType = new Uint8Array(np)
   const xLen = new Float32Array(np)
+  const xClr = new Uint8Array(np)
   for (let e = 0; e < np; e++) {
-    const at = fill[pFrom[e]!]!++
+    const at = fill[pFrom[e]!]!
+    fill[pFrom[e]!] = at + 1
     xTo[at] = pTo[e]!
     xType[at] = pType[e]!
     xLen[at] = pLen[e]!
+    xClr[at] = pClr[e]!
   }
 
-  return { cs, gnx, gny, minX, minY, n, colStart, nz, nI, nJ, kind, roof, head, clr, nbr, nbrType, xStart, xTo, xType, xLen, buildMs: performance.now() - t0 }
+  return { cs, gnx, gny, minX, minY, n, colStart, nz, nI, nJ, kind, roof, head, clr, nbr, nbrType, xStart, xTo, xType, xLen, xClr, buildMs: performance.now() - t0 }
+}
+
+/** Map hello.config.mech (or self.stats) to nav params; missing fields keep the defaults. */
+export function navParamsFromMech(m: Record<string, number | undefined> | undefined, tickDt = 0.05): Partial<MechNavParams> {
+  const o: Partial<MechNavParams> = {}
+  if (!m) return o
+  const num = (v: number | undefined): v is number => typeof v === "number" && Number.isFinite(v)
+  if (num(m.radius)) o.radius = m.radius
+  if (num(m.height)) o.height = m.height
+  if (num(m.walk_speed)) o.walkSpeed = m.walk_speed
+  if (num(m.boost_speed)) o.boostSpeed = m.boost_speed
+  if (num(m.gravity)) o.gravity = m.gravity
+  if (num(m.jump_speed)) o.jumpSpeed = m.jump_speed
+  if (num(m.step_up)) o.stepUp = m.step_up
+  if (num(m.max_slope_deg)) o.maxSlopeDeg = m.max_slope_deg
+  if (num(m.energy)) o.maxEnergy = m.energy
+  if (num(m.jet_drain)) o.jetDrain = m.jet_drain
+  const g = o.gravity ?? DEFAULT_PARAMS.gravity
+  if (num(m.max_rise_speed)) o.maxRiseSpeed = Math.max(1, m.max_rise_speed - g * tickDt)
+  const rise = o.maxRiseSpeed ?? DEFAULT_PARAMS.maxRiseSpeed
+  o.jetEnergyPerM = Math.round(((o.jetDrain ?? DEFAULT_PARAMS.jetDrain) / rise) * 100) / 100
+  return o
 }

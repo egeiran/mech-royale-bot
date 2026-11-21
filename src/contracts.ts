@@ -85,6 +85,10 @@ export interface World {
   /** max solid height per cell (terrain or top of highest span), for ray skipping and "roof height" queries */
   readonly topZ: Float32Array
 
+  /** topmost surface seen from above (terrain or highest prism top) */
+  surfaceZ(x: number, y: number): number
+  /** per-cell distance in metres to the nearest ground-level wall cell or map edge (lazy, cached) */
+  wallDist(): Float32Array
   /** terrain height (bilinear), ignoring prisms */
   groundZ(x: number, y: number): number
   /** highest standable surface with top <= z + tol (terrain or a prism top) under a point; the floor a body at z rests on */
@@ -106,7 +110,8 @@ export interface World {
   /**
    * Full §8 visibility rule: eye at (ex,ey,ez) with torso yaw `yaw` sees a target whose feet are at (tx,ty,tz)
    * and whose height is th (line of sight to its centre or its top), within nearRange in any direction or
-   * within range and inside the fovDeg yaw wedge.
+   * within range and inside the fovDeg yaw wedge. Distances are 3D from the eye to the target centre.
+   * Heights to pass for non-mech targets (fitted on real data): pickups and cubes ~0.8 m, crates 2.4 m.
    */
   canSee(ex: number, ey: number, ez: number, yaw: number, tx: number, ty: number, tz: number, th: number, range: number, fovDeg: number, nearRange: number): boolean
 }

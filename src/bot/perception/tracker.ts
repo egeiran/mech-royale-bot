@@ -45,6 +45,12 @@ export class Track {
   ax = 0
   ay = 0
   az = 0
+  /** velocity smoothed over ~0.6 s (a strafing target's mean drift) */
+  vxAvg = 0
+  vyAvg = 0
+  /** RMS (m/s, smoothed over ~1.5 s) of the horizontal velocity around vxAvg/vyAvg: 0 = steady mover,
+   *  ~10 = hard strafe jitter. Feed it to hitProbGun as targetSpeedUncertainty. */
+  velJitter = 0
   aimYaw = 0
   aimPitch = 0
   /** rad/s, from consecutive observations */
@@ -278,11 +284,21 @@ export class EnemyTracker {
         tr.ay += k * ((vy - tr.vy) / dt - tr.ay)
         tr.az += k * ((vz - tr.vz) / dt - tr.az)
         tr.aimYawRate = wrapPi(m.aim[0] - tr.aimYaw) / dt
+        const ka = 1 - Math.exp(-dt / 0.6)
+        tr.vxAvg += ka * (vx - tr.vxAvg)
+        tr.vyAvg += ka * (vy - tr.vyAvg)
+        const ex = vx - tr.vxAvg, ey = vy - tr.vyAvg
+        const kj = 1 - Math.exp(-dt / 1.5)
+        tr.velJitter = Math.sqrt(tr.velJitter * tr.velJitter + kj * (ex * ex + ey * ey - tr.velJitter * tr.velJitter))
       } else {
         tr.ax = 0
         tr.ay = 0
         tr.az = 0
         tr.aimYawRate = 0
+        tr.vxAvg = vx
+        tr.vyAvg = vy
+        // unknown mover: assume a moderately evasive one until we have watched it
+        tr.velJitter = tr.npc ? 2 : 6
       }
       if (m.hp !== undefined) {
         if (wasFresh && tr.hp >= 0) {
@@ -466,6 +482,19 @@ export class EnemyTracker {
     let n = 0
     for (let i = 0; i < this.mechs.length; i++) if (this.mechs[i].dead) n++
     return n
+  }
+
+  /**
+   * Velocity to lead with for a projectile flight of `tof` seconds: the instantaneous velocity for short
+   * flights, blending to the ~0.6 s average for long ones (a jittering target's velocity now says little
+   * about where it is half a second later). Writes out.x/y/z (m/s).
+   */
+  leadVelocity(tr: Track, tof: number, out: Vec3Out): void {
+    let w = (tof - 0.15) / 0.45
+    w = w < 0 ? 0 : w > 1 ? 1 : w
+    out.x = tr.vx + w * (tr.vxAvg - tr.vx)
+    out.y = tr.vy + w * (tr.vyAvg - tr.vy)
+    out.z = tr.vz * (1 - w)
   }
 
   /**

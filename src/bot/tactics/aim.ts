@@ -108,6 +108,10 @@ export function newAimSolution(): AimSolution {
  *
  * The shot leaves on tick k = max(1, ceil(cooldown/TICK), ceil(slew time to the solution/TICK)); the muzzle is
  * muzzleOut m out horizontally along the solution yaw at height muzzleHeight above the feet.
+ * spawnStepTicks = 1 is the real server (a bullet advances one step in the tick it is spawned; measured on the
+ * recorded stream); pass 0 for a simulator that spawns shots after its projectile step.
+ * Note: with a long cooldown (reload) the solution is where to point WHEN THE SHOT LEAVES; to keep tracking the
+ * target meanwhile pass min(cooldown, ~0.3).
  * Returns out.inRange. Fixed-point iteration (3 inner x 2 outer), no allocation.
  */
 export function leadGun(
@@ -116,20 +120,19 @@ export function leadGun(
   tx: number, ty: number, tz: number, tvx: number, tvy: number, tvz: number,
   projSpeed: number, range: number, cooldown: number,
   out: AimSolution,
-  muzzleHeight = 7, muzzleOut = 3, turnRate = 4, pitchRate = 3, minPitch = -0.7, maxPitch = 1.3,
+  muzzleHeight = 7, muzzleOut = 3, turnRate = 4, pitchRate = 3, minPitch = -0.7, maxPitch = 1.3, spawnStepTicks = 1,
 ): boolean {
   let k = Math.ceil(cooldown / TICK - 1e-6)
   if (k < 1) k = 1
-  const kMin = k
   let yaw = 0, pitch = 0, s = 0, ix = tx, iy = ty, iz = tz, tL = 0
   // initial flight-time guess from the present geometry
   {
     const dx = tx - sx, dy = ty - sy, dz = tz - (sz + muzzleHeight)
     s = Math.sqrt(dx * dx + dy * dy + dz * dz) / projSpeed
   }
-  for (let outer = 0; outer < 3; outer++) {
+  for (let outer = 0; outer < 5; outer++) {
     const tFire = k * TICK
-    tL = tFire - TICK // the bullet steps once in its spawn tick: effective launch one tick earlier
+    tL = tFire - spawnStepTicks * TICK // the bullet steps once in its spawn tick: effective launch one tick earlier
     const bx = sx + svx * tFire, by = sy + svy * tFire, bz = sz + svz * tFire + muzzleHeight
     let h = 0, dz = 0, hx = 0, hy = 0
     for (let i = 0; i < 3; i++) {
@@ -146,9 +149,9 @@ export function leadGun(
     }
     yaw = Math.atan2(hy, hx)
     pitch = Math.atan2(dz, h)
-    let ks = Math.ceil(slewTime(aimYaw, aimPitch, yaw, clamp(pitch, minPitch, maxPitch), turnRate, pitchRate) / TICK - 1e-6)
-    if (ks < kMin) ks = kMin
-    if (ks === k) break
+    // the fire tick only ever moves later, so the loop cannot oscillate; a tick too many is harmless
+    const ks = Math.ceil(slewTime(aimYaw, aimPitch, yaw, clamp(pitch, minPitch, maxPitch), turnRate, pitchRate) / TICK - 1e-6)
+    if (ks <= k) break
     k = ks
   }
   out.yaw = yaw
@@ -410,15 +413,15 @@ export function leadMortar(
 ): boolean {
   let k = Math.ceil(cooldown / TICK - 1e-6)
   if (k < 1) k = 1
-  const kMin = k
   let yaw = 0, pitch = NaN, tof = 0, ix = tx, iy = ty, tL = 0
   const dz = tz - (sz + launchHeight)
   out.ok = false
-  for (let outer = 0; outer < 3; outer++) {
+  for (let outer = 0; outer < 5; outer++) {
     const tFire = k * TICK
     tL = tFire - TICK
     const bx = sx + svx * tFire, by = sy + svy * tFire
-    for (let i = 0; i < 4; i++) {
+    // a lobbed shell is slow (horizontal speed can be < 20 m/s): the fixed point needs more rounds than the gun
+    for (let i = 0; i < 10; i++) {
       const tt = tL + tof
       ix = tx + tvx * tt
       iy = ty + tvy * tt
@@ -429,9 +432,8 @@ export function leadMortar(
       if (pitch !== pitch) return false
       tof = mortarTof(h, pitch, speed)
     }
-    let ks = Math.ceil(slewTime(aimYaw, aimPitch, yaw, pitch, turnRate, pitchRate) / TICK - 1e-6)
-    if (ks < kMin) ks = kMin
-    if (ks === k) break
+    const ks = Math.ceil(slewTime(aimYaw, aimPitch, yaw, pitch, turnRate, pitchRate) / TICK - 1e-6)
+    if (ks <= k) break
     k = ks
   }
   out.yaw = yaw

@@ -238,7 +238,10 @@ export class GridWorld implements World {
     this.lastHit = HIT_NONE
     if (!(maxDist > 0)) return 0
     const len = Math.sqrt(dx * dx + dy * dy + dz * dz)
-    if (!(len > 0)) return maxDist
+    // degenerate or non-finite input: report "nothing hit" (and never loop)
+    if (!(len > 0) || !(len < Infinity) || !(ox - ox === 0) || !(oy - oy === 0) || !(oz - oz === 0)) return maxDist
+    const missDist = maxDist
+    if (maxDist > 1e6) maxDist = 1e6
     const inv = 1 / len
     dx *= inv
     dy *= inv
@@ -257,17 +260,17 @@ export class GridWorld implements World {
         const b = (nx - px) / dx
         t0 = Math.max(t0, Math.min(a, b))
         t1 = Math.min(t1, Math.max(a, b))
-      } else if (px < 0 || px >= nx) return maxDist
+      } else if (px < 0 || px >= nx) return missDist
       if (dy !== 0) {
         const a = -py / dy
         const b = (ny - py) / dy
         t0 = Math.max(t0, Math.min(a, b))
         t1 = Math.min(t1, Math.max(a, b))
-      } else if (py < 0 || py >= ny) return maxDist
-      if (t0 >= t1) return maxDist
+      } else if (py < 0 || py >= ny) return missDist
+      if (t0 >= t1) return missDist
       t = t0
     }
-    if (dz >= 0 && oz + dz * t > this.maxTopZ) return maxDist
+    if (dz >= 0 && oz + dz * t > this.maxTopZ) return missDist
 
     let i = Math.floor(px + dx * t)
     let j = Math.floor(py + dy * t)
@@ -314,7 +317,8 @@ export class GridWorld implements World {
             }
           }
         }
-        // terrain: compare the ray with the bilinear ground at the cell entry and exit
+        // terrain: inside one cell the bilinear ground along the ray is exactly quadratic, so three samples
+        // (entry, middle, exit) determine f(u) = rayZ - ground = c0 + c1*u + c2*u^2 on u in [0, 1]; solve it.
         const fIn = zIn - bilinear(h, nx, ny, px + dx * t, py + dy * t)
         if (fIn < 0) {
           if (t <= best) {
@@ -323,24 +327,26 @@ export class GridWorld implements World {
           }
         } else {
           const fOut = zOut - bilinear(h, nx, ny, px + dx * tOut, py + dy * tOut)
-          if (fOut < 0) {
-            // the ground along the ray is quadratic inside a cell (and very steep in places): bisect the crossing
-            let lo = t
-            let hi = tOut
-            let flo = fIn
-            let fhi = fOut
-            for (let it = 0; it < 6; it++) {
-              const mid = 0.5 * (lo + hi)
-              const fm = oz + dz * mid - bilinear(h, nx, ny, px + dx * mid, py + dy * mid)
-              if (fm < 0) {
-                hi = mid
-                fhi = fm
-              } else {
-                lo = mid
-                flo = fm
-              }
+          const tm = 0.5 * (t + tOut)
+          const fMid = oz + dz * tm - bilinear(h, nx, ny, px + dx * tm, py + dy * tm)
+          const c2 = 2 * (fIn + fOut - 2 * fMid)
+          const c1 = fOut - fIn - c2
+          let u = 2
+          if (Math.abs(c2) < 1e-9) {
+            if (fOut < 0) u = fIn / (fIn - fOut)
+          } else {
+            const disc = c1 * c1 - 4 * c2 * fIn
+            if (disc >= 0) {
+              const q = -0.5 * (c1 + (c1 < 0 ? -1 : 1) * Math.sqrt(disc))
+              const r1 = q / c2
+              const r2 = q !== 0 ? fIn / q : 2
+              if (r1 >= 0 && r1 <= 1) u = r1
+              if (r2 >= 0 && r2 <= 1 && r2 < u) u = r2
             }
-            const th = lo + ((hi - lo) * flo) / (flo - fhi)
+            if (u > 1 && fOut < 0) u = fIn / (fIn - fOut)
+          }
+          if (u <= 1) {
+            const th = t + (tOut - t) * u
             if (th < best) {
               best = th
               kind = HIT_TERRAIN
@@ -349,17 +355,17 @@ export class GridWorld implements World {
         }
         if (kind !== HIT_NONE) {
           this.lastHit = kind
-          return best < t ? t : best > maxDist ? maxDist : best
+          return best < t ? t : best > maxDist ? missDist : best
         }
       }
-      if (last) return maxDist
+      if (last) return missDist
       if (tMaxX < tMaxY) {
         i += stepI
-        if (i < 0 || i >= nx) return maxDist
+        if (i < 0 || i >= nx) return missDist
         tMaxX += tDeltaX
       } else {
         j += stepJ
-        if (j < 0 || j >= ny) return maxDist
+        if (j < 0 || j >= ny) return missDist
         tMaxY += tDeltaY
       }
       t = tOut
@@ -441,6 +447,7 @@ export class GridWorld implements World {
     let tMX = ddx > 0 ? (i + 1 - lx0) / ddx : ddx < 0 ? (i - lx0) / ddx : Infinity
     let tMY = ddy > 0 ? (j + 1 - ly0) / ddy : ddy < 0 ? (j - ly0) / ddy : Infinity
     let steps = Math.abs(iEnd - i) + Math.abs(jEnd - j)
+    if (!(steps >= 0) || steps > 100000) return 0 // non-finite or absurd input: no trees (and never loop)
 
     const Dx = bx - ax
     const Dy = by - ay
