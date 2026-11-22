@@ -152,6 +152,18 @@ regen undoes only 3.5-5 % of our late mech damage, abandoned damage 5-8 %, damag
 `focusFinishHp 0.3 + focusFinishCrowd 1`: KT A2 +0.21 +- 0.14, v2 -0.20; FARM C2 +0.38, A2/B1/R1 -0.05..-0.11.
 FARM vs KT: -0.4..-0.9 in every time-scheduled model (fewer cubes: kills are the cube source), +0.07 (+8 s alive) in R1.
 
+## Pacing / drops (r1-opt agent, 2026-11-22 morning; all off by default)
+New params: `phaseCubes` / `phaseKills` (the `ph*` switch also fires at N cubes / N kills), `spare*` (squad.ts
+`spareNow`: a mech below `spareHp` is not finished and the fight branch is skipped while cubes < `spareCubes` or
+no laser with `spareLaser`, before `spareUntil`, own HP >= `spareSelfHp`, < `spareOnUs` others on us),
+`dropUntil` / `dropFrom` (common.ts wantDrop time window). Squad model "M1" (fits the real kill curve and the
+KT/FARM/base/fortress levels, NOT the real FARM > KT order): R1 + `all.cubeStart 3, cubeRate 4, cubeMax 16,
+huntSpeed 0.5, huntBoost 0, strafeMul 1.3, allAt 140`; cross-checks MA (huntSpeed 0.75) and R1. Paired vs FARM, 576
+seeds each, M1 / MA / R1: `valDrop 0` +0.30 / +0.25 / +0.28 (the 95 s drop walk is the loss; `dropFrom 120` same);
++ `phaseCubes 8` to KT hunting +0.43 / +0.20 / +0.32; KT + `engageDist 80` + `valDrop 0` + `upNanites 120` +0.47 /
++0.38 / +0.13; spare variants -0.35..-2.1 in M1 (kill tempo is the cube source); `engageDist 30` -0.19, upgrade
+orders +-0.1. Scripts (scratch, not kept): r1/rr.sh, mb.sh, scan.sh, sana.py.
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,
