@@ -29,6 +29,8 @@ export class ZoneModel {
   trueNcx = 0
   trueNcy = 0
   trueNr = 1e6
+  /** zone-out: after the first shrink always refer to the current circle (follow the edge as it recedes) */
+  refCur = false
   /** zone-out reference circle (set by inflate) */
   refX = 0
   refY = 0
@@ -90,7 +92,7 @@ export class ZoneModel {
 
   /** zone-out reference circle from the server's circles (no change to the model's own circle) */
   setRef(): void {
-    const next = this.t >= this.t0 && this.t < this.t1
+    const next = this.t >= this.t0 && this.t < this.t1 && !(this.refCur && this.phase >= 1)
     this.refX = next ? this.trueNcx : this.trueCx
     this.refY = next ? this.trueNcy : this.trueCy
     this.refR = next ? this.trueNr : this.trueR

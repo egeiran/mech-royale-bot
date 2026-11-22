@@ -1,0 +1,7 @@
+import { runProcess } from "../runner/run.ts"
+import { loadWorld } from "../world/index.ts"
+import { BOT_NAME, mainBot } from "../bot/brain/index.ts"
+import { warmup } from "../bot/brain/warmup.ts"
+
+// gunmag base + zone-out late (third session): from 132 s, with a laser, walk to a spot up to 130 m outside the true circle (within 260 m) and shoot from there, following the edge as it recedes; hunters never leave the zone (real: 5.39 probe), so when all of them come they are pinned at the edge where house guns hit 6-18 %. Back inside after 25 s out there with nothing hit; modeGapMs 12
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1, rushZone1: 1, rangeGunOnly: 55, upGunMag: 105, modeGapMs: 12, zoneOutT: 132, zoneOutHits: 1, zoneOutD: 130, zoneOutLaser: 1, zoneOutRefCur: 1, zoneOutProbeS: 25 } })

@@ -2393,6 +2393,7 @@ class ZoneModel {
   trueNcx = 0;
   trueNcy = 0;
   trueNr = 1e6;
+  refCur = false;
   refX = 0;
   refY = 0;
   refR = 1e6;
@@ -2442,7 +2443,7 @@ class ZoneModel {
     this.r = this.nr = this.refR + d;
   }
   setRef() {
-    const next = this.t >= this.t0 && this.t < this.t1;
+    const next = this.t >= this.t0 && this.t < this.t1 && !(this.refCur && this.phase >= 1);
     this.refX = next ? this.trueNcx : this.trueCx;
     this.refY = next ? this.trueNcy : this.trueCy;
     this.refR = next ? this.trueNr : this.trueR;
@@ -6764,6 +6765,8 @@ var DEFAULTS = {
   zoneOutMaxGo: 260,
   zoneOutWaitS: 25,
   zoneOutHits: 0,
+  zoneOutRefCur: 0,
+  zoneOutLaser: 0,
   zoneOutOnUs: 0,
   zoneOutOnUsHp: 0,
   seekSoundS: 0,
@@ -6805,6 +6808,9 @@ var DEFAULTS = {
   laserHuntFirst: 0,
   laserHuntLoot: 45,
   laserHuntCentre: 0,
+  crateSnipeDist: 0,
+  crateSnipeMaxS: 9,
+  crateSnipeUntil: 999,
   crateNoLasDist: 0,
   crateNoLasSafe: 0,
   finishChaseHp: 0,
@@ -6948,6 +6954,7 @@ var DEFAULTS = {
   lootZoneCost: 0.5,
   lootMaxDist: 260,
   cubeOverCapMult: 0.35,
+  cubeCapAt: 0,
   npcMinHp: 0.55,
   lootForgetS: 150,
   lootSwitchMargin: 4,
@@ -7283,7 +7290,7 @@ function bestLoot(bb, silentOnly, maxDist, out, zoneGuard = false) {
   let best = 0;
   const tc = lootTc(bb);
   const cap = bb.cfg.cubes.stat_cap ?? 10;
-  const cubeMult = bb.cubes >= cap ? P.cubeOverCapMult : 1;
+  const cubeMult = bb.cubes >= (P.cubeCapAt > 0 ? P.cubeCapAt : cap) ? P.cubeOverCapMult : 1;
   const items = bb.loot.items;
   const w = bb.world;
   for (let i = 0;i < items.length; i++) {
@@ -8398,6 +8405,7 @@ class SquadScratch {
   cstHp = 0;
   cstT = 0;
   crPhase = 0;
+  crFar = false;
   crId = -1;
   crT0 = 0;
   crX = 0;
@@ -8787,7 +8795,9 @@ function pickCrate(bb, sc) {
       continue;
     const dx = c.x - bb.x, dy = c.y - bb.y;
     const d = Math.hypot(dx, dy);
-    if (d > (P.crateNoLasDist > 0 && !bb.haveLaser ? P.crateNoLasDist : P.crateReflexDist) || d < 3)
+    const lim = P.crateNoLasDist > 0 && !bb.haveLaser ? P.crateNoLasDist : P.crateReflexDist;
+    const snipe = P.crateSnipeDist > 0 && !bb.haveLaser && bb.t < P.crateSnipeUntil;
+    if (d > (snipe ? Math.max(lim, P.crateSnipeDist) : lim) || d < 3)
       continue;
     if (w && c.z - w.groundZ(c.x, c.y) > 3)
       continue;
@@ -8804,10 +8814,15 @@ function pickCrate(bb, sc) {
   }
   return best;
 }
+function cubesCapped(bb) {
+  const P = bb.P;
+  return P.cubeOverCapMult <= 0 && bb.cubes >= (P.cubeCapAt > 0 ? P.cubeCapAt : bb.cfg.cubes.stat_cap ?? 10);
+}
 function crateStart(bb, sc, c) {
   if (sc.crPhase !== 1 || sc.crId !== c.id)
     sc.crT0 = bb.t;
   sc.crPhase = 1;
+  sc.crFar = bb.P.crateSnipeDist > 0 && Math.hypot(c.x - bb.x, c.y - bb.y) > bb.P.crateReflexDist + 5;
   sc.crId = c.id;
   sc.crX = c.x;
   sc.crY = c.y;
@@ -8827,7 +8842,7 @@ function crateReflex(bb, sc, it, target) {
     if (!c) {
       sc.crPhase = 2;
       sc.crBrokeT = bb.t;
-    } else if (bb.t - sc.crT0 > P.crateReflexMaxS || bb.t - c.tSeen > 1) {
+    } else if (bb.t - sc.crT0 > (sc.crFar ? P.crateSnipeMaxS : P.crateReflexMaxS) || bb.t - c.tSeen > 1) {
       c.badUntil = bb.t + 30;
       sc.crPhase = 0;
     } else {
@@ -8865,11 +8880,11 @@ function crateReflex(bb, sc, it, target) {
             continue;
           if (p.wk === W_LASER)
             s -= 100;
-          else if (p.wk === W_LIGHTNING && noLaserKnown)
+          else if (p.wk === W_LIGHTNING && noLaserKnown && !sc.crFar)
             s -= 50;
           else
             continue;
-        } else if (p.type !== L_CUBE)
+        } else if (p.type !== L_CUBE || sc.crFar || cubesCapped(bb))
           continue;
         if (s < bs) {
           bs = s;
@@ -8898,6 +8913,8 @@ function crateReflex(bb, sc, it, target) {
     }
   }
   if (bb.t >= P.crateReflexUntil || !bb.gun || bb.gunSlot < 0)
+    return false;
+  if (bb.haveLaser && cubesCapped(bb))
     return false;
   const c = pickCrate(bb, sc);
   if (!c)
@@ -9199,7 +9216,7 @@ function trainKite(bb, mv, sc, it, target) {
   let cd = 30;
   for (let i = 0;i < items.length; i++) {
     const c = items[i];
-    if (c.type !== L_CUBE || c.badUntil > bb.t)
+    if (c.type !== L_CUBE || c.badUntil > bb.t || cubesCapped(bb))
       continue;
     const rx = c.x - bb.x, ry = c.y - bb.y;
     const d = Math.hypot(rx, ry);
@@ -9486,7 +9503,10 @@ function zoneOutStep(bb, mv, sc, it, target) {
   if (!w)
     return false;
   if (sc.zoMode === 0) {
-    if (bb.t < zn.t0)
+    if (zn.phase === 0 && bb.t < zn.t0)
+      return false;
+    zn.refCur = P.zoneOutRefCur > 0;
+    if (P.zoneOutLaser > 0 && !bb.haveLaser)
       return false;
     if (P.zoneOutOnUs > 0) {
       let onUs = 0;
@@ -11666,5 +11686,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/v4-gunmag-zoneout-hits.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1, rushZone1: 1, rangeGunOnly: 55, upGunMag: 105, modeGapMs: 12, zoneOutT: 92, zoneOutHits: 1, zoneOutD: 115 } });
+// src/entries/v4-gunmag-cubecap.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1, rushZone1: 1, rangeGunOnly: 55, upGunMag: 105, modeGapMs: 12, cubeOverCapMult: 0 } });

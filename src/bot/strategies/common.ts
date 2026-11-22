@@ -237,7 +237,9 @@ export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, o
   let best = 0
   const tc = lootTc(bb)
   const cap = (bb.cfg.cubes.stat_cap as number) ?? 10
-  const cubeMult = bb.cubes >= cap ? P.cubeOverCapMult : 1
+  // cubeCapAt (0 = the stat cap): from that many cubes on, cube values are multiplied by cubeOverCapMult (every
+  // cube past the stat cap only makes the body 5 % bigger; upgrades still come at 15 / 21 cubes)
+  const cubeMult = bb.cubes >= (P.cubeCapAt > 0 ? P.cubeCapAt : cap) ? P.cubeOverCapMult : 1
   const items = bb.loot.items
   const w = bb.world
   for (let i = 0; i < items.length; i++) {

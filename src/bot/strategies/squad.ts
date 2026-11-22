@@ -73,6 +73,8 @@ export class SquadScratch {
   cstT = 0
   /** crate reflex: phase (0 none, 1 shooting crId, 2 collecting around crX/crY), start / break time, last seen hp */
   crPhase = 0
+  /** crate sniping: the current crate is a far one (only a dropped laser is collected) */
+  crFar = false
   crId = -1
   crT0 = 0
   crX = 0
@@ -480,7 +482,10 @@ function pickCrate(bb: Blackboard, sc: SquadScratch): LootItem | null {
     if (c.type !== L_CRATE || c.tSeen !== bb.t || c.badUntil > bb.t) continue
     const dx = c.x - bb.x, dy = c.y - bb.y
     const d = Math.hypot(dx, dy)
-    if (d > (P.crateNoLasDist > 0 && !bb.haveLaser ? P.crateNoLasDist : P.crateReflexDist) || d < 3) continue
+    const lim = P.crateNoLasDist > 0 && !bb.haveLaser ? P.crateNoLasDist : P.crateReflexDist
+    // crate sniping: without a laser, crates out to crateSnipeDist are broken from where we stand (15 % drop a laser)
+    const snipe = P.crateSnipeDist > 0 && !bb.haveLaser && bb.t < P.crateSnipeUntil
+    if (d > (snipe ? Math.max(lim, P.crateSnipeDist) : lim) || d < 3) continue
     // its cube must be reachable on foot (no roof crates) and stay inside the zone
     if (w && c.z - w.groundZ(c.x, c.y) > 3) continue
     if (bb.zone.marginAt(c.x, c.y, bb.t + 12) < 8) continue
@@ -495,10 +500,17 @@ function pickCrate(bb: Blackboard, sc: SquadScratch): LootItem | null {
   return best
 }
 
+/** cube cap variant (cubeOverCapMult 0): we hold all the cubes we want - more only make the body bigger */
+function cubesCapped(bb: Blackboard): boolean {
+  const P = bb.P
+  return P.cubeOverCapMult <= 0 && bb.cubes >= (P.cubeCapAt > 0 ? P.cubeCapAt : ((bb.cfg.cubes.stat_cap as number) ?? 10))
+}
+
 /** start shooting crate c (phase 1) */
 function crateStart(bb: Blackboard, sc: SquadScratch, c: LootItem): void {
   if (sc.crPhase !== 1 || sc.crId !== c.id) sc.crT0 = bb.t
   sc.crPhase = 1
+  sc.crFar = bb.P.crateSnipeDist > 0 && Math.hypot(c.x - bb.x, c.y - bb.y) > bb.P.crateReflexDist + 5
   sc.crId = c.id
   sc.crX = c.x
   sc.crY = c.y
@@ -524,7 +536,7 @@ function crateReflex(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track
       // gone from memory (broken, or seen gone): collect whatever lies there
       sc.crPhase = 2
       sc.crBrokeT = bb.t
-    } else if (bb.t - sc.crT0 > P.crateReflexMaxS || bb.t - c.tSeen > 1) {
+    } else if (bb.t - sc.crT0 > (sc.crFar ? P.crateSnipeMaxS : P.crateReflexMaxS) || bb.t - c.tSeen > 1) {
       c.badUntil = bb.t + 30
       sc.crPhase = 0
     } else {
@@ -559,9 +571,9 @@ function crateReflex(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track
         if (p.type === L_PICKUP) {
           if (pickupValue(bb, p.wk) <= 0) continue
           if (p.wk === W_LASER) s -= 100
-          else if (p.wk === W_LIGHTNING && noLaserKnown) s -= 50
+          else if (p.wk === W_LIGHTNING && noLaserKnown && !sc.crFar) s -= 50
           else continue
-        } else if (p.type !== L_CUBE) continue
+        } else if (p.type !== L_CUBE || sc.crFar || cubesCapped(bb)) continue
         if (s < bs) {
           bs = s
           best = p
@@ -588,6 +600,8 @@ function crateReflex(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track
     }
   }
   if (bb.t >= P.crateReflexUntil || !bb.gun || bb.gunSlot < 0) return false
+  // capped on cubes and armed with a laser: a crate has nothing for us
+  if (bb.haveLaser && cubesCapped(bb)) return false
   const c = pickCrate(bb, sc)
   if (!c) return false
   crateStart(bb, sc, c)
@@ -895,7 +909,7 @@ function trainKite(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Intent, targ
   let cd = 30
   for (let i = 0; i < items.length; i++) {
     const c = items[i]
-    if (c.type !== L_CUBE || c.badUntil > bb.t) continue
+    if (c.type !== L_CUBE || c.badUntil > bb.t || cubesCapped(bb)) continue
     const rx = c.x - bb.x, ry = c.y - bb.y
     const d = Math.hypot(rx, ry)
     if (d >= cd || d < 0.5 || (rx * sc.trDx + ry * sc.trDy) / d < 0.77) continue
@@ -1190,7 +1204,10 @@ function zoneOutStep(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Intent, ta
   if (!w) return false
   if (sc.zoMode === 0) {
     // the first shrink must be under way (before it there is no outside on the map)
-    if (bb.t < zn.t0) return false
+    if (zn.phase === 0 && bb.t < zn.t0) return false
+    zn.refCur = P.zoneOutRefCur > 0
+    // zoneOutLaser: only with a laser in hand (at 100+ m the gun alone does not win the trade)
+    if (P.zoneOutLaser > 0 && !bb.haveLaser) return false
     // pack trigger (zoneOutOnUs): only once that many visible mechs shoot / aim at us, and only with a spot in reach
     if (P.zoneOutOnUs > 0) {
       let onUs = 0

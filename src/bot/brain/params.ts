@@ -146,6 +146,11 @@ export const DEFAULTS = {
   zoneOutHits: 0,
   /** zone-out pack trigger: start only when this many visible mechs shoot / aim at us (0 = at zoneOutT), or one
    *  fewer while we are below zoneOutOnUsHp; and only if a spot lies within zoneOutMaxGo right then */
+  /** zone-out: 1 = from the second shrink on stay outside the CURRENT circle (follow its edge) instead of
+   *  pre-positioning outside the next one */
+  zoneOutRefCur: 0,
+  /** zone-out: 1 = start only while we hold a laser */
+  zoneOutLaser: 0,
   zoneOutOnUs: 0,
   zoneOutOnUsHp: 0,
   /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
@@ -233,6 +238,12 @@ export const DEFAULTS = {
   laserHuntLoot: 45,
   laserHuntCentre: 0,
   /** crate reflex while no laser is held: these replace crateReflexDist / crateReflexSafe (0 = keep) */
+  /** crate sniping (0 = off): while we hold no laser (before crateSnipeUntil s) the crate reflex also breaks visible
+   *  ground crates out to this distance from where we stand, giving each crateSnipeMaxS s; of a far crate only a
+   *  dropped laser is collected (15 % of crates drop one) */
+  crateSnipeDist: 0,
+  crateSnipeMaxS: 9,
+  crateSnipeUntil: 999,
   crateNoLasDist: 0,
   crateNoLasSafe: 0,
   /** finish kills: a mech target below this HP fraction that runs away (or broke the line) is chased with boost
@@ -518,6 +529,8 @@ export const DEFAULTS = {
   lootMaxDist: 260,
   /** multiply cube values by this once we hold stat_cap cubes (size keeps growing, stats do not) */
   cubeOverCapMult: 0.35,
+  /** cube count from which cubeOverCapMult applies (0 = cubes.stat_cap) */
+  cubeCapAt: 0,
   /** minimum HP fraction to pick a fight with an NPC */
   npcMinHp: 0.55,
   /** forget loot not seen for this long */
