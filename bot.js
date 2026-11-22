@@ -11010,5 +11010,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-FL-s152.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 152, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, fortT: 90 } });
+// src/entries/final-FL-s153.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 153, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, fortT: 90 } });
