@@ -96,6 +96,13 @@ export const DEFAULTS = {
   laserHuntSeenR: 90,
   /** SQUAD: nothing to loot and nobody in sight -> hold position and scan instead of seeking / exploring (1) */
   idleHold: 0,
+  /** SQUAD centre hold (1 = on): instead of exploring, walk (no boost) to an open, on-foot-reachable ground spot
+   *  within centerHoldR m of the next circle's centre and hold there scanning, from centerHoldFrom s */
+  centerHold: 0,
+  centerHoldR: 60,
+  centerHoldFrom: 0,
+  /** ... and loot (step 5: cubes, crates, NPCs, weapons) only within this many m of us meanwhile (0 = lootMaxDist) */
+  centerHoldLoot: 0,
   /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
   seekSoundS: 0,
   /** SQUAD: reload before contact when the target is further than this and the mag is below reloadIdleFrac

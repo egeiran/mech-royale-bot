@@ -164,6 +164,14 @@ seeds each, M1 / MA / R1: `valDrop 0` +0.30 / +0.25 / +0.28 (the 95 s drop walk 
 +0.38 / +0.13; spare variants -0.35..-2.1 in M1 (kill tempo is the cube source); `engageDist 30` -0.19, upgrade
 orders +-0.1. Scripts (scratch, not kept): r1/rr.sh, mb.sh, scan.sh, sana.py.
 
+## Centre hold (2026-11-22; off by default)
+`centerHold: 1` (squad.ts step 6''', replaces explore, after seek): walk (no boost, no jets) to an open ground cell
+(exposure field ground layer, >= 6 m from walls, same on-foot nav component) within `centerHoldR` (60) of the next
+circle's centre, re-picked when that centre moves, and hold there scanning; from `centerHoldFrom` s. FARM explores only
+0.4 % of decisions (loot reaches 260 m), so alone it is inert: batch 3001..3048 vs FARM 6.85 / 6.83 (45 ties).
+`centerHoldLoot` m (0 = off) bounds loot step 5 meanwhile: 40 -> 7.02 / 6.83 (n.s.), distance from the next centre at
+30 / 60 s 279 / 264 -> 256 / 210 m (spawns ~285 m out; the circle is ~380 m for the first ~100 s).
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,

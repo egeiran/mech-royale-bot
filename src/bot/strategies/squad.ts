@@ -101,6 +101,14 @@ export class SquadScratch {
   phDone = false
   /** roof fortress variant (brain/fortress.ts) */
   readonly fort = new FortState()
+  /** centre hold variant: spot near the next circle's centre, last search time, arrived there, nav query (on foot) */
+  chX = 0
+  chY = 0
+  chZ = 0
+  chOk = false
+  chT = -1e9
+  chArr = false
+  readonly chQ = { radius: 2.5, height: 9, allowJet: false, energy: 0 }
 }
 
 /**
@@ -202,6 +210,65 @@ function snipeSpot(bb: Blackboard, sc: SquadScratch): boolean {
     sc.postArrT = -1
   }
   return sc.postOk
+}
+
+/**
+ * centre hold spot: an open ground cell of the exposure field (standable ground layer = no building footprint, no
+ * roof; >= 6 m from walls) within centerHoldR of the next circle's centre (zone model: re-searched when that centre
+ * moves or the circle 45 s ahead leaves the spot), on our on-foot nav component when one matches; into sc.ch*.
+ */
+function centerSpot(bb: Blackboard, mv: Mover, sc: SquadScratch): boolean {
+  const w = bb.world
+  if (!w) return false
+  const zn = bb.zone
+  const R = Math.max(0, Math.min(bb.P.centerHoldR, zn.nr - bb.P.zoneMargin - 6))
+  if (sc.chOk && Math.hypot(sc.chX - zn.ncx, sc.chY - zn.ncy) <= R + 4 && zn.marginAt(sc.chX, sc.chY, bb.t + 45) >= 6 && !bb.isBadGoal(sc.chX, sc.chY)) return true
+  sc.chOk = false
+  if (bb.t - sc.chT < 1) return false
+  sc.chT = bb.t
+  const f = getExposure(w)
+  const nav = mv.nav
+  const q = sc.chQ
+  q.radius = bb.radius
+  q.height = bb.height
+  const myComp = nav ? nav.componentAt(bb.x, bb.y, bb.z, q) : -1
+  let bs = -1e9, bsAny = -1e9
+  let bx = 0, by = 0, bxAny = 0, byAny = 0
+  for (let ri = 0; ri < POST_RINGS.length; ri++) {
+    const r = POST_RINGS[ri] * R
+    const nd = r === 0 ? 1 : POST_DIRS
+    for (let k = 0; k < nd; k++) {
+      const a = (k * 2 * Math.PI) / nd
+      const x = zn.ncx + r * Math.cos(a), y = zn.ncy + r * Math.sin(a)
+      const c = cellOf(f, x, y)
+      if (!(f.flags[c]! & F_STAND) || f.edge[c]! < 6) continue
+      if (zn.marginAt(x, y, bb.t + 45) < 6 || bb.isBadGoal(x, y)) continue
+      const s = Math.min(15, f.edge[c]!) + (10 * f.expo[c]!) / 255 - 0.1 * r - 0.02 * Math.hypot(x - bb.x, y - bb.y)
+      if (s > bsAny) {
+        bsAny = s
+        bxAny = x
+        byAny = y
+      }
+      if (s > bs && (myComp < 0 || nav!.componentAt(x, y, f.z[c]!, q) === myComp)) {
+        bs = s
+        bx = x
+        by = y
+      }
+    }
+  }
+  // no candidate on our component (we stand on a roof / in a pocket): the best one anyway (plans may drop down)
+  if (bs <= -1e8 && bsAny > -1e8) {
+    bs = bsAny
+    bx = bxAny
+    by = byAny
+  }
+  if (bs <= -1e8) return false
+  sc.chOk = true
+  sc.chArr = false
+  sc.chX = bx
+  sc.chY = by
+  sc.chZ = w.groundZ(bx, by)
+  return true
 }
 
 /** boost on long trips with nobody in sight (tempo) while energy is plentiful */
@@ -1267,7 +1334,9 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     weaponReflex(bb, it)
     return it
   }
-  if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, P.lootMaxDist, sc.lc, P.zoneGuard > 0)) {
+  // centre hold variant with centerHoldLoot: only loot that close to us (the rest of the time is spent at the centre)
+  const lootD = P.centerHold > 0 && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist
+  if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, lootD, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK)
     // crate stand-off variant: standing at a crate for 5 s without denting it (no line, out of the pitch range)
     // -> leave it for 30 s (play server: 33 s and 58 s parked on a crate)
@@ -1340,6 +1409,24 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
       weaponReflex(bb, it)
       return it
     }
+  }
+
+  // 6'''. centre hold variant: instead of exploring, walk to an open ground spot near the next circle's centre and
+  // hold there scanning (hunters released one after another have the shortest walk to the middle)
+  if (P.centerHold > 0 && bb.t >= P.centerHoldFrom && centerSpot(bb, mv, sc)) {
+    const d = Math.hypot(sc.chX - bb.x, sc.chY - bb.y)
+    if (d > (sc.chArr ? 10 : 4)) {
+      sc.chArr = false
+      it.goto(sc.chX, sc.chY, sc.chZ, PACE_WALK, "center")
+      it.arrive = 3
+      it.allowJet = false
+    } else {
+      sc.chArr = true
+      it.hold(bb.x, bb.y, bb.z, "chold")
+    }
+    it.face = FACE_SCAN
+    weaponReflex(bb, it)
+    return it
   }
 
   // 7. explore inside the next circle (finds loot; keeps us moving)

@@ -6703,6 +6703,10 @@ var DEFAULTS = {
   laserHuntUntil: 150,
   laserHuntSeenR: 90,
   idleHold: 0,
+  centerHold: 0,
+  centerHoldR: 60,
+  centerHoldFrom: 0,
+  centerHoldLoot: 0,
   seekSoundS: 0,
   reloadFarDist: 999,
   shieldOrbit: 0.3,
@@ -8339,6 +8343,13 @@ class SquadScratch {
   fcT = -1e9;
   phDone = false;
   fort = new FortState;
+  chX = 0;
+  chY = 0;
+  chZ = 0;
+  chOk = false;
+  chT = -1e9;
+  chArr = false;
+  chQ = { radius: 2.5, height: 9, allowJet: false, energy: 0 };
 }
 function huntLead(bb, sc, soundS) {
   let lead = null;
@@ -8440,6 +8451,64 @@ function snipeSpot(bb, sc) {
     sc.postArrT = -1;
   }
   return sc.postOk;
+}
+function centerSpot(bb, mv, sc) {
+  const w = bb.world;
+  if (!w)
+    return false;
+  const zn = bb.zone;
+  const R = Math.max(0, Math.min(bb.P.centerHoldR, zn.nr - bb.P.zoneMargin - 6));
+  if (sc.chOk && Math.hypot(sc.chX - zn.ncx, sc.chY - zn.ncy) <= R + 4 && zn.marginAt(sc.chX, sc.chY, bb.t + 45) >= 6 && !bb.isBadGoal(sc.chX, sc.chY))
+    return true;
+  sc.chOk = false;
+  if (bb.t - sc.chT < 1)
+    return false;
+  sc.chT = bb.t;
+  const f = getExposure(w);
+  const nav = mv.nav;
+  const q = sc.chQ;
+  q.radius = bb.radius;
+  q.height = bb.height;
+  const myComp = nav ? nav.componentAt(bb.x, bb.y, bb.z, q) : -1;
+  let bs = -1e9, bsAny = -1e9;
+  let bx = 0, by = 0, bxAny = 0, byAny = 0;
+  for (let ri = 0;ri < POST_RINGS.length; ri++) {
+    const r = POST_RINGS[ri] * R;
+    const nd = r === 0 ? 1 : POST_DIRS;
+    for (let k = 0;k < nd; k++) {
+      const a = k * 2 * Math.PI / nd;
+      const x = zn.ncx + r * Math.cos(a), y = zn.ncy + r * Math.sin(a);
+      const c = cellOf(f, x, y);
+      if (!(f.flags[c] & F_STAND) || f.edge[c] < 6)
+        continue;
+      if (zn.marginAt(x, y, bb.t + 45) < 6 || bb.isBadGoal(x, y))
+        continue;
+      const s = Math.min(15, f.edge[c]) + 10 * f.expo[c] / 255 - 0.1 * r - 0.02 * Math.hypot(x - bb.x, y - bb.y);
+      if (s > bsAny) {
+        bsAny = s;
+        bxAny = x;
+        byAny = y;
+      }
+      if (s > bs && (myComp < 0 || nav.componentAt(x, y, f.z[c], q) === myComp)) {
+        bs = s;
+        bx = x;
+        by = y;
+      }
+    }
+  }
+  if (bs <= -1e8 && bsAny > -1e8) {
+    bs = bsAny;
+    bx = bxAny;
+    by = byAny;
+  }
+  if (bs <= -1e8)
+    return false;
+  sc.chOk = true;
+  sc.chArr = false;
+  sc.chX = bx;
+  sc.chY = by;
+  sc.chZ = w.groundZ(bx, by);
+  return true;
 }
 function travelPace(bb, x, y) {
   if (bb.nEn > 0 || bb.energy < bb.P.boostMinEnergy)
@@ -9475,7 +9544,8 @@ function decideSquadCore(bb, mv, sc) {
     weaponReflex(bb, it);
     return it;
   }
-  if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, P.lootMaxDist, sc.lc, P.zoneGuard > 0)) {
+  const lootD = P.centerHold > 0 && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist;
+  if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, lootD, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK);
     const ci = sc.lc.item;
     if (P.crateStandOff > 0 && ci && ci.type === L_CRATE) {
@@ -9545,6 +9615,21 @@ function decideSquadCore(bb, mv, sc) {
       weaponReflex(bb, it);
       return it;
     }
+  }
+  if (P.centerHold > 0 && bb.t >= P.centerHoldFrom && centerSpot(bb, mv, sc)) {
+    const d = Math.hypot(sc.chX - bb.x, sc.chY - bb.y);
+    if (d > (sc.chArr ? 10 : 4)) {
+      sc.chArr = false;
+      it.goto(sc.chX, sc.chY, sc.chZ, PACE_WALK, "center");
+      it.arrive = 3;
+      it.allowJet = false;
+    } else {
+      sc.chArr = true;
+      it.hold(bb.x, bb.y, bb.z, "chold");
+    }
+    it.face = FACE_SCAN;
+    weaponReflex(bb, it);
+    return it;
   }
   if (bb.t >= m.n2 || Math.hypot(m.n0 - bb.x, m.n1 - bb.y) < 8 || bb.zone.marginNext(m.n0, m.n1) < (P.zoneGuard > 0 ? P.zoneMargin + P.zoneGuard : 10)) {
     const a = bb.rng.next() * Math.PI * 2;
@@ -11182,5 +11267,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/v4-farm-spare.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16, valDrop: 0, spareHp: 0.25, spareLaser: 1, spareUntil: 45, spareSelfHp: 0.6 } });
+// src/entries/v4-farm-center.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16, centerHold: 1, centerHoldR: 60, centerHoldLoot: 40 } });
