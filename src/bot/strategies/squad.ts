@@ -1139,7 +1139,7 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     if (!threat) it.weaponsFree = false
   }
   // pass-hold variant: the same restraint for the whole match (non-hunters we shoot in passing join the hunt)
-  if (P.passHoldDist > 0 && !sc.fought && it.weaponsFree && it.targetId >= 0 && it.targetId < 100 && bb.mode !== MODE_FFA) {
+  if (P.passHoldDist > 0 && !sc.fought && it.weaponsFree && it.targetId >= 0 && it.targetId < 100 && bb.mode !== MODE_FFA && (P.passHoldHurt <= 0 || bb.hpFrac < healUntil(bb))) {
     let threat = true
     for (let i = 0; i < bb.nEn; i++) {
       const e = bb.en[i]
@@ -1504,7 +1504,7 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   }
   // centre / edge hold variants with centerHoldLoot: only loot that close to us (the rest of the time is spent holding)
   const lootD = (P.centerHold > 0 || P.edgeHold > 0) && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist
-  if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, lootD, sc.lc, P.zoneGuard > 0)) {
+  if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < P.healLootHp, lootD, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK)
     // crate stand-off variant: standing at a crate for 5 s without denting it (no line, out of the pitch range)
     // -> leave it for 30 s (play server: 33 s and 58 s parked on a crate)

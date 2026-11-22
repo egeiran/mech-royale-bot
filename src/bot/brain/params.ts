@@ -46,6 +46,12 @@ export const DEFAULTS = {
    *  than passHoldDist m. Non-hunters that get shot react (turn, return fire, close in); far damage regenerates. */
   passHoldDist: 0,
   passHoldHitS: 6,
+  /** 1 = pass-hold only while hurt (below healUntil): shots in passing restart our own 5 s regen delay */
+  passHoldHurt: 0,
+  /** SQUAD loot step while hurt (below healUntil) and the regen timer has not started yet: below this HP fraction
+   *  only silent loot (no shots at crates / NPCs, which restart the 5 s regen delay); above it loud loot too.
+   *  0.6 = the old hard-coded value; >= healUntil = always heal first */
+  healLootHp: 0.6,
 
   // ---------------------------------------------------------------- engagement range
   /** preferred duel distance with gun only */
