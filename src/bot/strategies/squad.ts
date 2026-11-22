@@ -66,6 +66,10 @@ export class SquadScratch {
   postDoneX = 1e9
   postDoneY = 1e9
   postDoneT = -1e9
+  /** crate stand-off variant (play-lab): crate loot goal watched for a stall (id, hp, time of the last progress) */
+  cstId = -1
+  cstHp = 0
+  cstT = 0
   /** crate reflex: phase (0 none, 1 shooting crId, 2 collecting around crX/crY), start / break time, last seen hp */
   crPhase = 0
   crId = -1
@@ -78,6 +82,16 @@ export class SquadScratch {
   /** jet scan: torso yaw swept so far (rad) and the last yaw */
   jsSweep = 0
   jsYaw = NaN
+  /** train kiting: last time the trigger held, run direction, waypoint, last plan time, boost burst on */
+  trT = -1e9
+  trDx = 0
+  trDy = 0
+  trGX = 0
+  trGY = 0
+  trGZ = 0
+  trPlanT = -1e9
+  trOk = false
+  trBoost = false
 }
 
 /**
@@ -400,6 +414,189 @@ function crateReflex(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track
   it.hold(bb.x, bb.y, bb.z, "crateR")
   it.shootCrate = c.id
   it.targetId = -1
+  return true
+}
+
+/** train kiting: visible mechs within kiteTrainR, or with a line on us within 220 m that aim / shot at us */
+function trainPursuers(bb: Blackboard): number {
+  const R = bb.P.kiteTrainR
+  let n = 0
+  for (let i = 0; i < bb.nEn; i++) {
+    const e = bb.en[i]
+    if (e.dist < R || (bb.los[e.id] === 1 && e.dist < 220 && (e.aimingAtUs || bb.t - e.tShotAtUs < 3))) n++
+  }
+  return n
+}
+
+const TR_DIRS = 16
+const TR_STEPS = [0.25, 0.5, 0.75, 1]
+/**
+ * train route: the run direction (16 candidates) that leads away from the pack's centroid along a long walkable
+ * line that does not dead-end, stays inside the zone, keeps clear of every pursuer, prefers open ground and the
+ * current direction; waypoint into sc.trG*
+ */
+function trainPlan(bb: Blackboard, mv: Mover, sc: SquadScratch): boolean {
+  const P = bb.P
+  const w = bb.world
+  let cx = 0, cy = 0, cw = 0
+  const trs = bb.tracker.mechs
+  for (let i = 0; i < trs.length; i++) {
+    const e = trs[i]
+    if (!e.known || e.dead || e.id === bb.me.id) continue
+    const age = e.age(bb.t)
+    if (age > 8 || e.dist > 300) continue
+    const wt = (e.visible ? 1 : 0.5) / (e.dist + 20)
+    cx += e.x * wt
+    cy += e.y * wt
+    cw += wt
+  }
+  let ax = sc.trDx, ay = sc.trDy
+  if (cw > 0) {
+    ax = bb.x - cx / cw
+    ay = bb.y - cy / cw
+    const l = Math.hypot(ax, ay)
+    if (l > 1e-3) {
+      ax /= l
+      ay /= l
+    }
+  }
+  const L = P.kiteTrainLook
+  const f = w ? getExposure(w) : null
+  let bs = -1e9, bdx = 0, bdy = 0, bfree = 0
+  for (let k = 0; k < TR_DIRS; k++) {
+    const a = (k * 2 * Math.PI) / TR_DIRS
+    const dx = Math.cos(a), dy = Math.sin(a)
+    let free = 0
+    for (let s = 0; s < TR_STEPS.length; s++) {
+      if (!mv.walkOk(bb, bb.x + dx * L * TR_STEPS[s], bb.y + dy * L * TR_STEPS[s])) break
+      free = L * TR_STEPS[s]
+    }
+    if (free <= 0) continue
+    const ex = bb.x + dx * free, ey = bb.y + dy * free
+    // dead end: no walkable continuation (straight or +-45 deg) from the end point
+    let cont = 0
+    if (w && free >= L * 0.5) {
+      const ez = w.groundZ(ex, ey)
+      for (let j = 0; j < 3 && cont === 0; j++) {
+        const a2 = a + (j - 1) * 0.8
+        if (mv.walkOkFrom(ex, ey, ez, ex + Math.cos(a2) * L * 0.5, ey + Math.sin(a2) * L * 0.5, bb.radius)) cont = 1
+      }
+    }
+    const zm = Math.min(bb.zone.marginAt(ex, ey, bb.t + free / 12), bb.zone.marginNext(ex, ey))
+    // pursuers near the route (distance from each visible mech to the segment us -> end point)
+    let block = 0
+    for (let i = 0; i < bb.nEn; i++) {
+      const e = bb.en[i]
+      const rx = e.x - bb.x, ry = e.y - bb.y
+      const along = Math.max(0, Math.min(free, rx * dx + ry * dy))
+      const dd = Math.hypot(rx - dx * along, ry - dy * along)
+      if (dd < 40) block += (40 - dd) / 40
+    }
+    let s = 3 * (dx * ax + dy * ay) + (2 * free) / L + cont + (dx * sc.trDx + dy * sc.trDy) - 4 * block
+    if (zm < 25) s += (zm - 25) * 0.15
+    if (f) {
+      const c = cellOf(f, ex, ey)
+      if (f.flags[c]! & F_STAND) s += f.expo[c]! / 255
+    }
+    if (s > bs) {
+      bs = s
+      bdx = dx
+      bdy = dy
+      bfree = free
+    }
+  }
+  if (bs < -1e8) return false
+  sc.trDx = bdx
+  sc.trDy = bdy
+  const g = Math.max(10, bfree * 0.8)
+  sc.trGX = bb.x + bdx * g
+  sc.trGY = bb.y + bdy * g
+  sc.trGZ = w ? w.groundZ(sc.trGX, sc.trGY) : bb.z
+  return true
+}
+
+/**
+ * Train kiting (P.kiteTrainN > 0, or from P.kiteTrainT with any pursuer): with several hunters on us keep RUNNING a
+ * long open route ahead of the pack (boost bursts with energy hysteresis) while the torso shoots the nearest pursuer
+ * with a clean line (nearly dead ones first). Cubes lying ahead on the route are picked up. Returns true when it
+ * filled the intent.
+ */
+function trainKite(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Intent, target: Track | null): boolean {
+  const P = bb.P
+  if (bb.t < P.kiteTrainFrom || (P.kiteTrainLaser > 0 && !bb.haveLaser)) return false
+  if (bb.haveLightning && !bb.haveLaser) return false
+  const n = trainPursuers(bb)
+  if (n === 0) return false
+  if (n >= P.kiteTrainN || bb.t >= P.kiteTrainT) sc.trT = bb.t
+  if (bb.t - sc.trT > P.kiteTrainHoldS) {
+    sc.trOk = false
+    return false
+  }
+  // target: nearest pursuer with a clean line, nearly dead ones first
+  let tg: Track | null = null
+  let ts = 1e9
+  let near = 1e9
+  for (let i = 0; i < bb.nEn; i++) {
+    const e = bb.en[i]
+    if (e.dist < near) near = e.dist
+    if (bb.los[e.id] !== 1) continue
+    const hpF = e.hp >= 0 && e.maxHp > 0 ? e.hp / e.maxHp : 1
+    const s = e.dist - (hpF < 0.3 ? 80 : 0) - (e.id === bb.mem.targetId ? 10 : 0)
+    if (s < ts) {
+      ts = s
+      tg = e
+    }
+  }
+  if (!tg) tg = target
+  if (tg) {
+    bb.mem.targetId = tg.id
+    bb.mem.targetT = bb.t
+  }
+  // route: replan every 0.5 s or near the waypoint
+  if (!sc.trOk || bb.t - sc.trPlanT > 0.5 || Math.hypot(sc.trGX - bb.x, sc.trGY - bb.y) < 8) {
+    sc.trPlanT = bb.t
+    sc.trOk = trainPlan(bb, mv, sc)
+  }
+  if (!sc.trOk) return false
+  // boost bursts: on with energy >= kiteTrainBoostE while a pursuer is within kiteTrainBoostDist, off below 15
+  if (sc.trBoost) {
+    if (bb.energy < 15 || near > P.kiteTrainBoostDist) sc.trBoost = false
+  } else if (bb.energy >= P.kiteTrainBoostE && near <= P.kiteTrainBoostDist) sc.trBoost = true
+  const pace = sc.trBoost ? PACE_BOOST : PACE_WALK
+  // range keeping: every pursuer beyond kiteTrainDist (their guns hit ~18 % there, our laser does not care) -> stand
+  // and shoot (no charge slow-down, no route into the others)
+  if (P.kiteTrainDist > 0 && near >= P.kiteTrainDist) {
+    sc.trBoost = false
+    it.hold(bb.x, bb.y, bb.z, "trHold")
+    it.face = FACE_THREATS
+    if (tg) it.targetId = tg.id
+    return true
+  }
+  // a cube ahead on the route (within 30 m, inside +-40 deg of the run direction, nearer to us than to any pursuer)
+  const items = bb.loot.items
+  let cube: LootItem | null = null
+  let cd = 30
+  for (let i = 0; i < items.length; i++) {
+    const c = items[i]
+    if (c.type !== L_CUBE || c.badUntil > bb.t) continue
+    const rx = c.x - bb.x, ry = c.y - bb.y
+    const d = Math.hypot(rx, ry)
+    if (d >= cd || d < 0.5 || (rx * sc.trDx + ry * sc.trDy) / d < 0.77) continue
+    let ok = true
+    for (let k = 0; k < bb.nEn && ok; k++) if (Math.hypot(bb.en[k].x - c.x, bb.en[k].y - c.y) < d + 10) ok = false
+    if (ok) {
+      cd = d
+      cube = c
+    }
+  }
+  if (cube) it.goto(cube.x, cube.y, cube.z, pace, "trCube").arrive = 0.6
+  else {
+    it.goto(sc.trGX, sc.trGY, sc.trGZ, pace, "train")
+    it.arrive = 2
+  }
+  it.allowJet = false
+  it.face = FACE_THREATS
+  if (tg) it.targetId = tg.id
   return true
 }
 
@@ -748,6 +945,12 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     }
   }
 
+  // 2''. train kiting variant: several hunters on us (or late) -> run a long open route ahead of the pack, shooting back
+  if ((P.kiteTrainN > 0 || P.kiteTrainT < 999) && trainKite(bb, mv, sc, it, target)) {
+    weaponReflex(bb, it)
+    return it
+  }
+
   // 2'. crate reflex variant (no mech near, nothing on us): stand and shoot a crate, then collect its cube / laser
   if (P.crateReflexDist > 0 && crateReflex(bb, sc, it, target)) {
     weaponReflex(bb, it)
@@ -894,6 +1097,19 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   }
   if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, P.lootMaxDist, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK)
+    // crate stand-off variant: standing at a crate for 5 s without denting it (no line, out of the pitch range)
+    // -> leave it for 30 s (play server: 33 s and 58 s parked on a crate)
+    const ci = sc.lc.item
+    if (P.crateStandOff > 0 && ci && ci.type === L_CRATE) {
+      if (sc.cstId !== ci.id || ci.hp < sc.cstHp - 1 || Math.hypot(bb.vx, bb.vy) > 1.5) {
+        sc.cstId = ci.id
+        sc.cstHp = ci.hp
+        sc.cstT = bb.t
+      } else if (bb.t - sc.cstT > 5) {
+        ci.badUntil = bb.t + 30
+        sc.cstId = -1
+      }
+    }
     it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
     if (target && it.targetId < 0 && it.shootCrate < 0) it.targetId = target.id
     weaponReflex(bb, it)

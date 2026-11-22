@@ -6730,6 +6730,16 @@ var DEFAULTS = {
   crateReflexMaxS: 4,
   crateCollectS: 10,
   crateScan: 0,
+  kiteTrainN: 0,
+  kiteTrainR: 120,
+  kiteTrainT: 999,
+  kiteTrainHoldS: 4,
+  kiteTrainLook: 90,
+  kiteTrainBoostE: 45,
+  kiteTrainBoostDist: 80,
+  kiteTrainLaser: 1,
+  kiteTrainDist: 0,
+  kiteTrainFrom: 0,
   rangeKite: 14,
   rangeBand: 5,
   strafeSpeed: 1,
@@ -6803,6 +6813,7 @@ var DEFAULTS = {
   zoneAimFrac: 0.55,
   zoneEarlyS: 25,
   zoneGuard: 0,
+  crateStandOff: 0,
   silentSpeed: 4.7,
   silentEnemyDist: 75,
   hideSearchR: 140,
@@ -7206,7 +7217,21 @@ function lootIntent(bb, c, it, pace) {
     return;
   }
   const item = c.item;
-  if (item.type === L_CRATE) {
+  if (item.type === L_CRATE && bb.P.crateStandOff > 0) {
+    const minPitch = Math.abs(bb.me.stats.min_pitch ?? -0.7);
+    const so = Math.max(bb.P.crateStandOff, (bb.muzzleH - 0.5) / Math.tan(Math.max(0.2, minPitch)) + 2);
+    const dx = bb.x - item.x, dy = bb.y - item.y;
+    const d = Math.hypot(dx, dy);
+    if (d < so - 2) {
+      const ux = d > 0.3 ? dx / d : 1, uy = d > 0.3 ? dy / d : 0;
+      it.loot(item.x + ux * so, item.y + uy * so, bb.z, pace, "crate");
+      it.arrive = 1.5;
+    } else {
+      it.loot(item.x, item.y, item.z, pace, "crate");
+      it.arrive = so;
+    }
+    it.shootCrate = item.id;
+  } else if (item.type === L_CRATE) {
     it.loot(item.x, item.y, item.z, pace, "crate");
     it.shootCrate = item.id;
     it.arrive = 3;
@@ -7636,6 +7661,9 @@ class SquadScratch {
   postDoneX = 1e9;
   postDoneY = 1e9;
   postDoneT = -1e9;
+  cstId = -1;
+  cstHp = 0;
+  cstT = 0;
   crPhase = 0;
   crId = -1;
   crT0 = 0;
@@ -7646,6 +7674,15 @@ class SquadScratch {
   crBrokeT = 0;
   jsSweep = 0;
   jsYaw = NaN;
+  trT = -1e9;
+  trDx = 0;
+  trDy = 0;
+  trGX = 0;
+  trGY = 0;
+  trGZ = 0;
+  trPlanT = -1e9;
+  trOk = false;
+  trBoost = false;
 }
 function huntLead(bb, sc, soundS) {
   let lead = null;
@@ -7970,6 +8007,193 @@ function crateReflex(bb, sc, it, target) {
   it.hold(bb.x, bb.y, bb.z, "crateR");
   it.shootCrate = c.id;
   it.targetId = -1;
+  return true;
+}
+function trainPursuers(bb) {
+  const R = bb.P.kiteTrainR;
+  let n = 0;
+  for (let i = 0;i < bb.nEn; i++) {
+    const e = bb.en[i];
+    if (e.dist < R || bb.los[e.id] === 1 && e.dist < 220 && (e.aimingAtUs || bb.t - e.tShotAtUs < 3))
+      n++;
+  }
+  return n;
+}
+var TR_DIRS = 16;
+var TR_STEPS = [0.25, 0.5, 0.75, 1];
+function trainPlan(bb, mv, sc) {
+  const P = bb.P;
+  const w = bb.world;
+  let cx = 0, cy = 0, cw = 0;
+  const trs = bb.tracker.mechs;
+  for (let i = 0;i < trs.length; i++) {
+    const e = trs[i];
+    if (!e.known || e.dead || e.id === bb.me.id)
+      continue;
+    const age = e.age(bb.t);
+    if (age > 8 || e.dist > 300)
+      continue;
+    const wt = (e.visible ? 1 : 0.5) / (e.dist + 20);
+    cx += e.x * wt;
+    cy += e.y * wt;
+    cw += wt;
+  }
+  let { trDx: ax, trDy: ay } = sc;
+  if (cw > 0) {
+    ax = bb.x - cx / cw;
+    ay = bb.y - cy / cw;
+    const l = Math.hypot(ax, ay);
+    if (l > 0.001) {
+      ax /= l;
+      ay /= l;
+    }
+  }
+  const L = P.kiteTrainLook;
+  const f = w ? getExposure(w) : null;
+  let bs = -1e9, bdx = 0, bdy = 0, bfree = 0;
+  for (let k = 0;k < TR_DIRS; k++) {
+    const a = k * 2 * Math.PI / TR_DIRS;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    let free = 0;
+    for (let s = 0;s < TR_STEPS.length; s++) {
+      if (!mv.walkOk(bb, bb.x + dx * L * TR_STEPS[s], bb.y + dy * L * TR_STEPS[s]))
+        break;
+      free = L * TR_STEPS[s];
+    }
+    if (free <= 0)
+      continue;
+    const ex = bb.x + dx * free, ey = bb.y + dy * free;
+    let cont = 0;
+    if (w && free >= L * 0.5) {
+      const ez = w.groundZ(ex, ey);
+      for (let j = 0;j < 3 && cont === 0; j++) {
+        const a2 = a + (j - 1) * 0.8;
+        if (mv.walkOkFrom(ex, ey, ez, ex + Math.cos(a2) * L * 0.5, ey + Math.sin(a2) * L * 0.5, bb.radius))
+          cont = 1;
+      }
+    }
+    const zm = Math.min(bb.zone.marginAt(ex, ey, bb.t + free / 12), bb.zone.marginNext(ex, ey));
+    let block = 0;
+    for (let i = 0;i < bb.nEn; i++) {
+      const e = bb.en[i];
+      const rx = e.x - bb.x, ry = e.y - bb.y;
+      const along = Math.max(0, Math.min(free, rx * dx + ry * dy));
+      const dd = Math.hypot(rx - dx * along, ry - dy * along);
+      if (dd < 40)
+        block += (40 - dd) / 40;
+    }
+    let s = 3 * (dx * ax + dy * ay) + 2 * free / L + cont + (dx * sc.trDx + dy * sc.trDy) - 4 * block;
+    if (zm < 25)
+      s += (zm - 25) * 0.15;
+    if (f) {
+      const c = cellOf(f, ex, ey);
+      if (f.flags[c] & F_STAND)
+        s += f.expo[c] / 255;
+    }
+    if (s > bs) {
+      bs = s;
+      bdx = dx;
+      bdy = dy;
+      bfree = free;
+    }
+  }
+  if (bs < -1e8)
+    return false;
+  sc.trDx = bdx;
+  sc.trDy = bdy;
+  const g = Math.max(10, bfree * 0.8);
+  sc.trGX = bb.x + bdx * g;
+  sc.trGY = bb.y + bdy * g;
+  sc.trGZ = w ? w.groundZ(sc.trGX, sc.trGY) : bb.z;
+  return true;
+}
+function trainKite(bb, mv, sc, it, target) {
+  const P = bb.P;
+  if (bb.t < P.kiteTrainFrom || P.kiteTrainLaser > 0 && !bb.haveLaser)
+    return false;
+  if (bb.haveLightning && !bb.haveLaser)
+    return false;
+  const n = trainPursuers(bb);
+  if (n === 0)
+    return false;
+  if (n >= P.kiteTrainN || bb.t >= P.kiteTrainT)
+    sc.trT = bb.t;
+  if (bb.t - sc.trT > P.kiteTrainHoldS) {
+    sc.trOk = false;
+    return false;
+  }
+  let tg = null;
+  let ts = 1e9;
+  let near = 1e9;
+  for (let i = 0;i < bb.nEn; i++) {
+    const e = bb.en[i];
+    if (e.dist < near)
+      near = e.dist;
+    if (bb.los[e.id] !== 1)
+      continue;
+    const hpF = e.hp >= 0 && e.maxHp > 0 ? e.hp / e.maxHp : 1;
+    const s = e.dist - (hpF < 0.3 ? 80 : 0) - (e.id === bb.mem.targetId ? 10 : 0);
+    if (s < ts) {
+      ts = s;
+      tg = e;
+    }
+  }
+  if (!tg)
+    tg = target;
+  if (tg) {
+    bb.mem.targetId = tg.id;
+    bb.mem.targetT = bb.t;
+  }
+  if (!sc.trOk || bb.t - sc.trPlanT > 0.5 || Math.hypot(sc.trGX - bb.x, sc.trGY - bb.y) < 8) {
+    sc.trPlanT = bb.t;
+    sc.trOk = trainPlan(bb, mv, sc);
+  }
+  if (!sc.trOk)
+    return false;
+  if (sc.trBoost) {
+    if (bb.energy < 15 || near > P.kiteTrainBoostDist)
+      sc.trBoost = false;
+  } else if (bb.energy >= P.kiteTrainBoostE && near <= P.kiteTrainBoostDist)
+    sc.trBoost = true;
+  const pace = sc.trBoost ? PACE_BOOST : PACE_WALK;
+  if (P.kiteTrainDist > 0 && near >= P.kiteTrainDist) {
+    sc.trBoost = false;
+    it.hold(bb.x, bb.y, bb.z, "trHold");
+    it.face = FACE_THREATS;
+    if (tg)
+      it.targetId = tg.id;
+    return true;
+  }
+  const items = bb.loot.items;
+  let cube = null;
+  let cd = 30;
+  for (let i = 0;i < items.length; i++) {
+    const c = items[i];
+    if (c.type !== L_CUBE || c.badUntil > bb.t)
+      continue;
+    const rx = c.x - bb.x, ry = c.y - bb.y;
+    const d = Math.hypot(rx, ry);
+    if (d >= cd || d < 0.5 || (rx * sc.trDx + ry * sc.trDy) / d < 0.77)
+      continue;
+    let ok = true;
+    for (let k = 0;k < bb.nEn && ok; k++)
+      if (Math.hypot(bb.en[k].x - c.x, bb.en[k].y - c.y) < d + 10)
+        ok = false;
+    if (ok) {
+      cd = d;
+      cube = c;
+    }
+  }
+  if (cube)
+    it.goto(cube.x, cube.y, cube.z, pace, "trCube").arrive = 0.6;
+  else {
+    it.goto(sc.trGX, sc.trGY, sc.trGZ, pace, "train");
+    it.arrive = 2;
+  }
+  it.allowJet = false;
+  it.face = FACE_THREATS;
+  if (tg)
+    it.targetId = tg.id;
   return true;
 }
 var EX_CELL = 50;
@@ -8305,6 +8529,10 @@ function decideSquadCore(bb, mv, sc) {
       return it;
     }
   }
+  if ((P.kiteTrainN > 0 || P.kiteTrainT < 999) && trainKite(bb, mv, sc, it, target)) {
+    weaponReflex(bb, it);
+    return it;
+  }
   if (P.crateReflexDist > 0 && crateReflex(bb, sc, it, target)) {
     weaponReflex(bb, it);
     return it;
@@ -8438,6 +8666,17 @@ function decideSquadCore(bb, mv, sc) {
   }
   if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, P.lootMaxDist, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK);
+    const ci = sc.lc.item;
+    if (P.crateStandOff > 0 && ci && ci.type === L_CRATE) {
+      if (sc.cstId !== ci.id || ci.hp < sc.cstHp - 1 || Math.hypot(bb.vx, bb.vy) > 1.5) {
+        sc.cstId = ci.id;
+        sc.cstHp = ci.hp;
+        sc.cstT = bb.t;
+      } else if (bb.t - sc.cstT > 5) {
+        ci.badUntil = bb.t + 30;
+        sc.cstId = -1;
+      }
+    }
     it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
     if (target && it.targetId < 0 && it.shootCrate < 0)
       it.targetId = target.id;
@@ -10032,6 +10271,7 @@ function warmup(bot, hello, decisions = 240) {
   const world = bot.bb?.world;
   if (!world)
     return;
+  getExposure(world);
   const cfg = hello.config;
   const zc = cfg.zone.start_center;
   for (let variant = 0;variant < 3; variant++) {
@@ -10111,5 +10351,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-K-s95.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 95, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100 } });
+// src/entries/final-T-s100.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 100, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60 } });

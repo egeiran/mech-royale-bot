@@ -203,6 +203,24 @@ export const DEFAULTS = {
   crateReflexMaxS: 4,
   crateCollectS: 10,
   crateScan: 0,
+  /** SQUAD train kiting: with at least kiteTrainN pursuers (visible mechs within kiteTrainR, or with a line on us
+   *  within 220 m aiming / shooting at us), or from kiteTrainT s with any pursuer, run a long open route ahead of
+   *  the pack (away from its centroid, no dead ends, inside the zone, kiteTrainLook m look-ahead) while shooting
+   *  the nearest pursuer with a clean line (nearly dead first); boost bursts from kiteTrainBoostE energy (off < 15)
+   *  while one is within kiteTrainBoostDist; on for kiteTrainHoldS s after the trigger lapses; kiteTrainLaser 1 =
+   *  only while holding a laser (never with lightning only). kiteTrainN 0 + kiteTrainT 999 = off */
+  kiteTrainN: 0,
+  kiteTrainR: 120,
+  kiteTrainT: 999,
+  kiteTrainHoldS: 4,
+  kiteTrainLook: 90,
+  kiteTrainBoostE: 45,
+  kiteTrainBoostDist: 80,
+  kiteTrainLaser: 1,
+  /** ... range keeping (0 = always run): with every visible mech beyond this distance stand and shoot instead */
+  kiteTrainDist: 0,
+  /** ... never before this match time (s) */
+  kiteTrainFrom: 0,
   /** kite style: preferred distance */
   rangeKite: 14,
   /** width of the dead band around the preferred range in which we only strafe */
@@ -357,6 +375,9 @@ export const DEFAULTS = {
    *  loot, NPCs and explore points lying where zoneDuty would switch to level 1 on arrival (+ this hysteresis),
    *  and let the laser rush run at level 1 too: no walk-out / walk-in flip-flop at the next circle's edge */
   zoneGuard: 0,
+  /** crate loot stand-off (m, 0 = off; play-lab): stop at least this far (and outside the gun's min-pitch cone)
+   *  from a crate we want to shoot, stepping back when closer (arrive 3 m put us on top of it: never hit) */
+  crateStandOff: 0,
 
   // ---------------------------------------------------------------- stealth (FFA ghost)
   /** speed (m/s) used for silent walking (below sound.step_speed) */

@@ -302,7 +302,23 @@ export function lootIntent(bb: Blackboard, c: LootChoice, it: Intent, pace: numb
     return
   }
   const item = c.item!
-  if (item.type === L_CRATE) {
+  if (item.type === L_CRATE && bb.P.crateStandOff > 0) {
+    // stand-off variant: the gun cannot point below min_pitch, so a crate at our feet is never hit (play server:
+    // 33 s and 58 s standing on a crate, data/intel/play2.md). Stop where it is in the pitch range; step back if closer.
+    const minPitch = Math.abs(bb.me.stats.min_pitch ?? -0.7)
+    const so = Math.max(bb.P.crateStandOff, (bb.muzzleH - 0.5) / Math.tan(Math.max(0.2, minPitch)) + 2)
+    const dx = bb.x - item.x, dy = bb.y - item.y
+    const d = Math.hypot(dx, dy)
+    if (d < so - 2) {
+      const ux = d > 0.3 ? dx / d : 1, uy = d > 0.3 ? dy / d : 0
+      it.loot(item.x + ux * so, item.y + uy * so, bb.z, pace, "crate")
+      it.arrive = 1.5
+    } else {
+      it.loot(item.x, item.y, item.z, pace, "crate")
+      it.arrive = so
+    }
+    it.shootCrate = item.id
+  } else if (item.type === L_CRATE) {
     it.loot(item.x, item.y, item.z, pace, "crate")
     it.shootCrate = item.id
     it.arrive = 3

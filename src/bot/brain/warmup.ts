@@ -7,6 +7,7 @@ import type { Bot, BotContext, Hello, Observation, World } from "../../contracts
 import type { ActorObs } from "../../protocol/mechfight.ts"
 import { makeRng } from "../../util/rng.ts"
 import { createBrain, type BrainBot } from "./index.ts"
+import { getExposure } from "../cover/exposure.ts"
 
 function selfWeapons(cfg: Hello["config"], second: "lightning" | "laser" | null): Observation["self"]["weapons"] {
   const g = cfg.weapons.gun
@@ -19,6 +20,9 @@ function selfWeapons(cfg: Hello["config"], second: "lightning" | "laser" | null)
 export function warmup(bot: Bot, hello: Hello, decisions = 240): void {
   const world = (bot as Partial<BrainBot>).bb?.world as World | undefined
   if (!world) return
+  // static exposure field (~40 ms to decode the first time): fetch it before `ready` so no mid-match decision pays
+  // for it (squad snipePost / kiteTrain use it; the FFA ghost builds its cover module from it)
+  getExposure(world)
   const cfg = hello.config
   const zc = cfg.zone.start_center
   for (let variant = 0; variant < 3; variant++) {

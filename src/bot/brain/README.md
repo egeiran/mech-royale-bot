@@ -91,6 +91,26 @@ Laser cycle (no change needed): in duels the laser is idle-ready only ~3 % of th
 charge before release 0.1 s (mean 0.32, 9 % auto-fire after LOS loss). Tools: `data/tmp/tempo/run.sh`,
 `tempo_an.py` (kills by 60/100 s, first-100 s shares), `paired.py`, `laser_cyc.py`, `drop_an.py`.
 
+## Squad-dev variants (squad-dev agent, 2026-11-22 night; all off by default; data/tmp/squaddev)
+Harness: `data/tmp/squaddev/h.sh <name> squad|none <T> <seats> <params> [squad overrides]` (real layouts, final
+config; prints crates broken by 15/30/60 s, first cube, kills by 60/100 s, SCORE = 16 - place, kills / survival after 72 s,
+damage taken per intent label after 72 s).
+- **Crate reflex** `crateReflexDist` m (+`crateReflexSafe/Until/MaxS`, `crateCollectS`, `crateScan`; squad.ts
+  `crateReflex`, step 2' before the fight branch): no mech within crateReflexSafe and nothing on us -> stand and shoot
+  the best visible ground crate with a clean line, then collect its cube / dropped laser; crateScan 1 also locks onto
+  one from the air after a full jet-scan turn. `60 / scan 1 / crateLaserW 1 / safe 100` vs final (230 runs, --opp
+  squad): crates by 30 s 0.10 -> 0.54 (no opponents 0.31 -> 1.08), finished 44 -> 79 %, first cube 25.0 -> 21.4 s,
+  laser by 60 s 70 -> 75 %, kills 5.60 -> 6.22.
+- **Train kiting** `kiteTrainN` (+`kiteTrainR/T/HoldS/Look/BoostE/BoostDist/Laser/Dist/From`; squad.ts `trainKite`,
+  step 2'' before the crate reflex and the fight branch): with >= N pursuers (laser held) run a 16-direction route away
+  from the pack centroid (walkable 90 m ray, no dead end, zone margin, clear of pursuers, open ground) with boost bursts,
+  shooting the nearest pursuer with a line; `kiteTrainDist` stands and shoots while every mech is beyond it. Sim (345
+  runs) `N 2 / Dist 120 / BoostDist 130 / BoostE 30 / From 60`: swarm 6.59 -> 6.86 (survival after 72 s 21.9 -> 24.3 s),
+  slow pursuit (`all.huntRadial=0.15,all.boostDuty=0,all.gunMaxDist=240`) 6.65 -> 7.02, allAt 999 10.10 -> 10.15 (kills
+  by 60 s unchanged). The sim swarm closes at ~7 m/s with boost from all sides (real 0-3 m/s): under-rates it.
+- warmup.ts now fetches the exposure field before `ready` (first fetch ~37 ms; the eval harness has no warm-up, so
+  its decision max shows it once per process).
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,
