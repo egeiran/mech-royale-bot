@@ -180,6 +180,9 @@ export function pickupValue(bb: Blackboard, wk: number): number {
   // a laser is worth far more than lightning (which also pulls us into losing 14 m brawls): skip lightning
   // while a laser is known nearby and we hold none
   if (wk === W_LIGHTNING && P.ltgVetoLaser > 0 && !bb.haveLaser && bb.nearestLaserDist() < P.ltgVetoLaser) return 0
+  // lightning fallback variant: no laser held or known from ltgNoLasT s on -> a lightning in a free slot is worth
+  // ltgNoLasVal (a laser found later still swaps it out through valSwapToLaser)
+  if (wk === W_LIGHTNING && P.ltgNoLasVal > 0 && bb.freeSlot >= 0 && !bb.haveLaser && bb.t >= P.ltgNoLasT && bb.nearestLaserDist() > 1e8) return P.ltgNoLasVal
   if (wk === W_LIGHTNING) return free ? P.valLightning : bb.haveMortar ? P.valLightning : bb.haveLaser ? P.valSwapToLightning : 0
   if (wk === W_LASER) return free ? P.valLaser : bb.haveMortar ? P.valSwapFromMortar : bb.haveLightning ? P.valSwapToLaser : 0
   if (wk === W_MORTAR) return free ? P.valMortar : 0

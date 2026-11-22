@@ -181,6 +181,10 @@ export const DEFAULTS = {
   jetPeekSafe: 120,
   jetPeekFrom: 10,
   jetPeekUntil: 150,
+  /** lightning fallback: from ltgNoLasT s, with no laser held or known, a lightning for a free slot is worth this
+   *  (style 1 values it 15, below cubes / crates / NPCs). 0 = off */
+  ltgNoLasVal: 0,
+  ltgNoLasT: 20,
   /** crate reflex while no laser is held: these replace crateReflexDist / crateReflexSafe (0 = keep) */
   crateNoLasDist: 0,
   crateNoLasSafe: 0,
