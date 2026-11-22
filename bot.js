@@ -6676,6 +6676,8 @@ var DEFAULTS = {
   modeGapUnknownS: 0,
   openPassiveS: 0,
   openEngageDist: 45,
+  passHoldDist: 0,
+  passHoldHitS: 6,
   rangeGun: 14,
   rangeLightning: 14,
   rangeLaser: 0,
@@ -9387,6 +9389,17 @@ function decideSquad(bb, mv, sc) {
     if (!threat)
       it.weaponsFree = false;
   }
+  if (P.passHoldDist > 0 && !sc.fought && it.weaponsFree && it.targetId >= 0 && it.targetId < 100 && bb.mode !== MODE_FFA) {
+    let threat = true;
+    for (let i = 0;i < bb.nEn; i++) {
+      const e = bb.en[i];
+      if (e.id !== it.targetId)
+        continue;
+      threat = bb.t - e.tShotAtUs < 4 || e.aimingAtUs && bb.los[e.id] === 1 || e.dist < P.passHoldDist || bb.t - e.tHitByUs < P.passHoldHitS;
+    }
+    if (!threat)
+      it.weaponsFree = false;
+  }
   if (P.spareHp > 0 && it.weaponsFree && it.targetId >= 0 && it.targetId < 100) {
     const tr = bb.tracker.get(it.targetId);
     if (tr && tr.visible && spareNow(bb, tr))
@@ -11445,5 +11458,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/v4-f2-gun55-noltg-lh.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rangeGunOnly: 55, valLightning: 0, laserHunt: 1, laserHuntUntil: 120, targetLaserBonus: 6, duelLaserDist: 60, lootClearWpn: 30, jetScan: 28, laserRush: 300 } });
+// src/entries/v4-farm-spare-long.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16, valDrop: 0, spareHp: 0.3, spareCubes: 8, spareLaser: 1, spareUntil: 90, spareSelfHp: 0.6 } });

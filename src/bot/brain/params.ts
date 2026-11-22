@@ -41,6 +41,11 @@ export const DEFAULTS = {
    *  no new fight beyond openEngageDist with a mech that is not on us, no seek / walk to sounds, no fire in passing */
   openPassiveS: 0,
   openEngageDist: 45,
+  /** SQUAD, whole match (0 = off): no fire in passing (loot / explore / rush / train hold) at a mech that is not on
+   *  us - not shooting us within 4 s, not aiming at us with a line, not hit by us within passHoldHitS s, and farther
+   *  than passHoldDist m. Non-hunters that get shot react (turn, return fire, close in); far damage regenerates. */
+  passHoldDist: 0,
+  passHoldHitS: 6,
 
   // ---------------------------------------------------------------- engagement range
   /** preferred duel distance with gun only */

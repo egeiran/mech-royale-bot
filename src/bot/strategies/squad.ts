@@ -1138,6 +1138,16 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     }
     if (!threat) it.weaponsFree = false
   }
+  // pass-hold variant: the same restraint for the whole match (non-hunters we shoot in passing join the hunt)
+  if (P.passHoldDist > 0 && !sc.fought && it.weaponsFree && it.targetId >= 0 && it.targetId < 100 && bb.mode !== MODE_FFA) {
+    let threat = true
+    for (let i = 0; i < bb.nEn; i++) {
+      const e = bb.en[i]
+      if (e.id !== it.targetId) continue
+      threat = bb.t - e.tShotAtUs < 4 || (e.aimingAtUs && bb.los[e.id] === 1) || e.dist < P.passHoldDist || bb.t - e.tHitByUs < P.passHoldHitS
+    }
+    if (!threat) it.weaponsFree = false
+  }
   // spare pacing variant: hold fire on a nearly dead mech we leave alive for now
   if (P.spareHp > 0 && it.weaponsFree && it.targetId >= 0 && it.targetId < 100) {
     const tr = bb.tracker.get(it.targetId)
