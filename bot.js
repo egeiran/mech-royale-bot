@@ -2529,6 +2529,8 @@ class Intent {
   arrive = 2;
   allowJet = true;
   jetUp = false;
+  forceJet = false;
+  stayUp = false;
   chase = false;
   targetId = -1;
   style = STYLE_PUSH;
@@ -2551,6 +2553,8 @@ class Intent {
     this.arrive = 2;
     this.allowJet = true;
     this.jetUp = false;
+    this.forceJet = false;
+    this.stayUp = false;
     this.chase = false;
     this.targetId = -1;
     this.style = STYLE_PUSH;
@@ -4175,13 +4179,14 @@ class Executor {
   my = 0;
   jump = false;
   boost = false;
+  stayUp = false;
   constructor(bb, mv) {
     this.bb = bb;
     this.mv = mv;
     this.jitter = new StrafeJitter(bb.P.strafeMin, bb.P.strafeMax);
     this.scanPhase = bb.rng.range(0, Math.PI * 2);
     this.spinDir = bb.rng.next() < 0.5 ? 1 : -1;
-    this.blockedFn = (dx, dy) => this.mv.blocked(this.bb, dx, dy, this.bb.P.probeDist);
+    this.blockedFn = (dx, dy) => this.mv.blocked(this.bb, dx, dy, this.bb.P.probeDist) || this.stayUp && this.dropAhead(dx, dy);
     this.groundFn = (x, y) => this.bb.world.groundZ(x, y);
   }
   run(it) {
@@ -4192,6 +4197,7 @@ class Executor {
     const a = {};
     this.mx = this.my = 0;
     this.jump = this.boost = false;
+    this.stayUp = it.stayUp;
     const st = this.stats;
     st.decisions++;
     const moved = Math.hypot(bb.x - this.lastX, bb.y - this.lastY);
@@ -4214,7 +4220,7 @@ class Executor {
           this.gotoMove(tr.x, tr.y, tr.z, true, 3);
       }
     } else if (it.kind !== K_IDLE) {
-      this.mv.goto(bb, it.gx, it.gy, it.gz, it.allowJet && bb.nThreats === 0 && bb.t - bb.tHurt > 3, it.arrive);
+      this.mv.goto(bb, it.gx, it.gy, it.gz, it.allowJet && (it.forceJet || bb.nThreats === 0 && bb.t - bb.tHurt > 3), it.arrive);
       this.mx = this.mv.mx;
       this.my = this.mv.my;
       this.jump = this.mv.jump;
@@ -4484,6 +4490,8 @@ class Executor {
       const base = Math.atan2(this.my, this.mx);
       const turn = this.unstickN % 4 === 1 ? 0 : this.unstickN % 4 === 2 ? 1.4 : this.unstickN % 4 === 3 ? -1.4 : Math.PI;
       this.unstickYaw = base + turn;
+      for (let k = 0;k < 4 && this.stayUp && this.dropAhead(Math.cos(this.unstickYaw), Math.sin(this.unstickYaw)); k++)
+        this.unstickYaw += Math.PI / 2;
       this.unstickUntil = bb.t + 1.4;
       this.slowRun = 0;
     }
@@ -4539,6 +4547,20 @@ class Executor {
       return true;
     const m = this.aimer;
     return w.segClear(m.bx, m.by, m.bz, m.ex, m.ey, m.ez);
+  }
+  dropAhead(dx, dy) {
+    const bb = this.bb;
+    const l = Math.hypot(dx, dy);
+    if (l < 0.000001)
+      return false;
+    const r = bb.P.probeDist + bb.radius;
+    const w = bb.world;
+    for (let k = 1;k <= 2; k++) {
+      const f = k * r / 2 / l;
+      if (w.floorZ(bb.x + dx * f, bb.y + dy * f, bb.z + 1.3, 0) < bb.z - 2)
+        return true;
+    }
+    return false;
   }
   liveTarget(id) {
     const tr = this.bb.tracker.get(id);
@@ -6740,6 +6762,24 @@ var DEFAULTS = {
   kiteTrainLaser: 1,
   kiteTrainDist: 0,
   kiteTrainFrom: 0,
+  fortOnUs: 0,
+  fortNearR: 60,
+  fortT: 999,
+  fortHp: 0,
+  fortKills: 0,
+  fortFrom: 0,
+  fortLaser: 0,
+  fortMinH: 18,
+  fortEdge: 10,
+  fortSafeR: 90,
+  fortMaxDist: 160,
+  fortZoneMargin: 20,
+  fortStayS: 40,
+  fortRelocS: 40,
+  fortR: 150,
+  fortQuietS: 25,
+  fortPeek: 0,
+  fortCubeDist: 30,
   rangeKite: 14,
   rangeBand: 5,
   strafeSpeed: 1,
@@ -7623,6 +7663,588 @@ function cellOf(f, x, y) {
   return j * f.gnx + i;
 }
 
+// src/bot/brain/fortress.ts
+var ST_X0 = -390;
+var ST_X1 = -162;
+var ST_Y0 = -21;
+var ST_Y1 = 275;
+var MIN_EDGE = 6;
+var MIN_H = 8;
+var cache3 = new WeakMap;
+function getRoofs(world) {
+  const hit = cache3.get(world);
+  if (hit)
+    return hit;
+  const t0 = performance.now();
+  const f = getExposure(world);
+  const { gnx, gny, n } = f;
+  const cl = new Int32Array(n).fill(-1);
+  const queue = new Int32Array(n);
+  let nCl = 0;
+  for (let s = 0;s < n; s++) {
+    if (cl[s] !== -1 || !(f.flags[n + s] & F_ROOF))
+      continue;
+    let qh = 0, qt = 0;
+    queue[qt++] = s;
+    cl[s] = nCl;
+    while (qh < qt) {
+      const c = queue[qh++];
+      const i = c % gnx, j = (c - i) / gnx;
+      const zc = f.z[n + c];
+      for (let d = 0;d < 4; d++) {
+        const ii = d === 0 ? i + 1 : d === 1 ? i - 1 : i;
+        const jj = d === 2 ? j + 1 : d === 3 ? j - 1 : j;
+        if (ii < 0 || jj < 0 || ii >= gnx || jj >= gny)
+          continue;
+        const v = jj * gnx + ii;
+        if (cl[v] !== -1 || !(f.flags[n + v] & F_ROOF) || Math.abs(f.z[n + v] - zc) > 1.2)
+          continue;
+        cl[v] = nCl;
+        queue[qt++] = v;
+      }
+    }
+    nCl++;
+  }
+  const keep = new Int32Array(n).fill(-1);
+  const cnt = new Int32Array(nCl + 1);
+  let m = 0;
+  for (let c = 0;c < n; c++) {
+    if (cl[c] < 0 || f.edge[n + c] < MIN_EDGE)
+      continue;
+    const i = c % gnx, j = (c - i) / gnx;
+    const x = f.minX + (i + 0.5) * CELL, y = f.minY + (j + 0.5) * CELL;
+    if (x > ST_X0 && x < ST_X1 && y > ST_Y0 && y < ST_Y1)
+      continue;
+    if (f.z[n + c] - world.groundZ(x, y) < MIN_H)
+      continue;
+    keep[c] = 1;
+    cnt[cl[c] + 1]++;
+    m++;
+  }
+  const clStart = new Int32Array(nCl + 1);
+  for (let s = 0;s < nCl; s++)
+    clStart[s + 1] = clStart[s] + cnt[s + 1];
+  const fill = clStart.slice();
+  const cat = {
+    f,
+    cl,
+    nCl,
+    n: m,
+    clStart,
+    clOf: new Int32Array(m),
+    x: new Float32Array(m),
+    y: new Float32Array(m),
+    z: new Float32Array(m),
+    h: new Float32Array(m),
+    edge: new Uint8Array(m),
+    expo: new Float32Array(m),
+    buildMs: 0
+  };
+  for (let c = 0;c < n; c++) {
+    if (keep[c] !== 1)
+      continue;
+    const s = cl[c];
+    const k = fill[s]++;
+    const i = c % gnx, j = (c - i) / gnx;
+    const x = f.minX + (i + 0.5) * CELL, y = f.minY + (j + 0.5) * CELL;
+    cat.clOf[k] = s;
+    cat.x[k] = x;
+    cat.y[k] = y;
+    cat.z[k] = f.z[n + c];
+    cat.h[k] = f.z[n + c] - world.groundZ(x, y);
+    cat.edge[k] = f.edge[n + c];
+    cat.expo[k] = f.expo[n + c] / 255;
+  }
+  cat.buildMs = performance.now() - t0;
+  cache3.set(world, cat);
+  return cat;
+}
+function roofAt(cat, x, y, z) {
+  const f = cat.f;
+  let i = Math.floor((x - f.minX) / CELL);
+  let j = Math.floor((y - f.minY) / CELL);
+  if (i < 0 || j < 0 || i >= f.gnx || j >= f.gny)
+    return -1;
+  const c = j * f.gnx + i;
+  const s = cat.cl[c];
+  if (s < 0)
+    return -1;
+  const rz = f.z[f.n + c];
+  return z > rz - 1.2 && z < rz + 6 ? s : -1;
+}
+function onSurface(cat, x, y, z, s) {
+  if (s < 0)
+    return false;
+  const f = cat.f;
+  const i0 = Math.floor((x - f.minX) / CELL);
+  const j0 = Math.floor((y - f.minY) / CELL);
+  for (let dj = -1;dj <= 1; dj++)
+    for (let di = -1;di <= 1; di++) {
+      const i = i0 + di, j = j0 + dj;
+      if (i < 0 || j < 0 || i >= f.gnx || j >= f.gny)
+        continue;
+      const c = j * f.gnx + i;
+      if (cat.cl[c] !== s)
+        continue;
+      const rz = f.z[f.n + c];
+      if (z > rz - 1.2 && z < rz + 6)
+        return true;
+    }
+  return false;
+}
+
+class FortState {
+  on = false;
+  tOn = -1e9;
+  retryT = -1e9;
+  ci = -1;
+  clId = -1;
+  arrT = -1;
+  travelT0 = 0;
+  travelD = 0;
+  fails = 0;
+  relocT = -1e9;
+  holdX = 0;
+  holdY = 0;
+  holdZ = 0;
+  holdT = -1;
+  lastPurT = -1e9;
+  spotT = -1e9;
+  bad = null;
+  peekOn = false;
+  peekT0 = 0;
+  peekNext = 0;
+  peekTgt = -1;
+  peekX = 0;
+  peekY = 0;
+  peekZ = 0;
+  nTrig = 0;
+  nReloc = 0;
+  trigT = -1;
+  roofT = -1;
+  roofS = 0;
+  peeks = 0;
+  trigD = -1;
+  why = "";
+}
+function fortEnabled(bb) {
+  const P = bb.P;
+  return P.fortOnUs > 0 || P.fortT < 999 || P.fortHp > 0 || P.fortKills > 0;
+}
+function safeR(cat, k, H) {
+  const e = cat.edge[k];
+  return e + e * Math.max(0, cat.h[k] - 7) / (0.5 * H);
+}
+function lineTo(w, ex, ey, ez, x, y, z, h) {
+  return w.segClear(ex, ey, ez, x, y, z + 0.5 * h) || w.segClear(ex, ey, ez, x, y, z + h);
+}
+function release(st, t, retry) {
+  st.on = false;
+  st.peekOn = false;
+  st.retryT = t + retry;
+  st.ci = -1;
+  st.clId = -1;
+}
+function pickRoof(bb, mv, st, cat, onUs, relax = 1) {
+  const P = bb.P;
+  const nav = mv.nav;
+  const n = cat.n;
+  if (!st.bad || st.bad.length !== cat.nCl)
+    st.bad = new Float64Array(cat.nCl);
+  const bad = st.bad;
+  let maxH = 45;
+  if (nav) {
+    const e = 0.85 * bb.maxEnergy;
+    maxH = 8;
+    while (maxH < 70 && nav.jetEnergy(maxH + 1) <= e)
+      maxH++;
+  }
+  let best = -1, bs = 1e9;
+  for (let k = 0;k < n; k++) {
+    if (cat.edge[k] < P.fortEdge || cat.h[k] < P.fortMinH || cat.h[k] > maxH)
+      continue;
+    const sr = safeR(cat, k, bb.height);
+    if (sr < P.fortSafeR * relax)
+      continue;
+    const s0 = cat.clOf[k];
+    if (bad[s0] > bb.t)
+      continue;
+    const x = cat.x[k], y = cat.y[k];
+    const dx = x - bb.x, dy = y - bb.y;
+    const d = Math.hypot(dx, dy);
+    if (d > P.fortMaxDist)
+      continue;
+    if (bb.zone.marginNext(x, y) < P.fortZoneMargin * relax)
+      continue;
+    const travel = d / bb.walk + cat.h[k] / 8 + 1;
+    let s = travel * (1 + 0.25 * onUs) + 8 * cat.expo[k] - Math.min(sr, 180) / 12;
+    if (s >= bs)
+      continue;
+    for (let i = 0;i < bb.nEn; i++) {
+      const e = bb.en[i];
+      const de = Math.hypot(e.x - x, e.y - y);
+      if (de < d)
+        s += 4 * (1 - de / (d + 1));
+    }
+    if (s >= bs)
+      continue;
+    if (bb.zone.marginAt(x, y, bb.t + travel + P.fortStayS) < 5)
+      continue;
+    if (bb.isBadGoal(x, y) || !fits(bb, mv, cat, k))
+      continue;
+    bs = s;
+    best = k;
+  }
+  if (best < 0)
+    return false;
+  st.ci = best;
+  st.clId = cat.clOf[best];
+  st.travelT0 = bb.t;
+  st.travelD = Math.hypot(cat.x[best] - bb.x, cat.y[best] - bb.y);
+  st.arrT = -1;
+  st.spotT = -1e9;
+  return true;
+}
+var SPOT_K = 10;
+var _ks = new Int32Array(SPOT_K);
+var _ss = new Float64Array(SPOT_K);
+function fits(bb, mv, cat, k) {
+  const nav = mv.nav;
+  return !nav || nav.clearanceAt(cat.x[k], cat.y[k], cat.z[k]) >= bb.radius + 0.3;
+}
+function spotStatic(bb, cat, k, cx, cy, cw, dUs) {
+  const x = cat.x[k], y = cat.y[k];
+  let s = 0.5 * cat.expo[k] - Math.min(safeR(cat, k, bb.height), 180) / 100 + Math.hypot(x - bb.x, y - bb.y) / 60;
+  if (cw > 0)
+    s -= 0.15 * (Math.hypot(x - cx, y - cy) - dUs) / 30;
+  return s;
+}
+function spotSeen(bb, cat, k, ph) {
+  const w = bb.world;
+  const x = cat.x[k], y = cat.y[k], z = cat.z[k];
+  const h = bb.height;
+  const trs = bb.tracker.mechs;
+  let n = 0, ne = 0;
+  for (let i = 0;i < trs.length && ne < 8; i++) {
+    const e = trs[i];
+    if (!e.known || e.dead || e.id === bb.me.id || e.age(bb.t) > 8 || e.dist > 260)
+      continue;
+    ne++;
+    if (lineTo(w, e.x, e.y, e.z + 0.89 * e.height, x, y, z, h))
+      n++;
+  }
+  if (ph && lineTo(w, ph.x, ph.y, ph.z + 8, x, y, z, h))
+    n++;
+  return n;
+}
+function chooseSpot(bb, mv, cat, st, ph) {
+  const P = bb.P;
+  const s0 = cat.clStart[st.clId], s1 = cat.clStart[st.clId + 1];
+  let cx = 0, cy = 0, cw = 0;
+  const trs = bb.tracker.mechs;
+  for (let i = 0;i < trs.length; i++) {
+    const e = trs[i];
+    if (!e.known || e.dead || e.id === bb.me.id || e.age(bb.t) > 15 || e.dist > 250)
+      continue;
+    cx += e.x;
+    cy += e.y;
+    cw++;
+  }
+  if (cw > 0) {
+    cx /= cw;
+    cy /= cw;
+  }
+  const dUs = cw > 0 ? Math.hypot(bb.x - cx, bb.y - cy) : 0;
+  let nk = 0;
+  for (let pass = 0;pass < 2 && nk === 0; pass++) {
+    for (let k = s0;k < s1; k++) {
+      if (k === st.ci || pass === 0 && cat.edge[k] < P.fortEdge)
+        continue;
+      if (Math.hypot(cat.x[k] - bb.x, cat.y[k] - bb.y) > 50)
+        continue;
+      if (bb.zone.marginAt(cat.x[k], cat.y[k], bb.t + P.fortRelocS + 10) < 8)
+        continue;
+      const s = spotStatic(bb, cat, k, cx, cy, cw, dUs);
+      if ((nk < SPOT_K || s < _ss[nk - 1]) && fits(bb, mv, cat, k)) {
+        let p = nk < SPOT_K ? nk++ : SPOT_K - 1;
+        while (p > 0 && _ss[p - 1] > s) {
+          _ss[p] = _ss[p - 1];
+          _ks[p] = _ks[p - 1];
+          p--;
+        }
+        _ss[p] = s;
+        _ks[p] = k;
+      }
+    }
+  }
+  const cur = st.ci;
+  const curS = cur >= 0 && cat.clOf[cur] === st.clId ? spotStatic(bb, cat, cur, cx, cy, cw, dUs) + 0.5 * spotSeen(bb, cat, cur, ph) : 1e9;
+  let best = cur, bs = curS - 0.25;
+  for (let q = 0;q < nk; q++) {
+    if (_ss[q] >= bs)
+      break;
+    const k = _ks[q];
+    const s = _ss[q] + 0.5 * spotSeen(bb, cat, k, ph);
+    if (s < bs) {
+      bs = s;
+      best = k;
+    }
+  }
+  st.ci = best;
+}
+function findPeek(bb, cat, st, e) {
+  const w = bb.world;
+  const d = Math.max(1, e.dist);
+  const ux = (e.x - bb.x) / d, uy = (e.y - bb.y) / d;
+  const tz = e.z + 0.5 * e.height;
+  for (let r = 2;r <= 26; r += 2) {
+    const x = bb.x + ux * r, y = bb.y + uy * r;
+    const xa = bb.x + ux * (r + 3), ya = bb.y + uy * (r + 3);
+    if (roofAt(cat, xa, ya, bb.z) !== st.clId || !onSurface(cat, x, y, bb.z, st.clId))
+      return false;
+    const z = w.floorZ(x, y, bb.z + 1.3, 0);
+    if (w.segClear(x, y, z + bb.muzzleH, e.x, e.y, tz)) {
+      st.peekX = x;
+      st.peekY = y;
+      st.peekZ = z;
+      return true;
+    }
+  }
+  return false;
+}
+function fortress(bb, mv, st, it, target, kills, ph) {
+  const P = bb.P;
+  const w = bb.world;
+  if (!w)
+    return false;
+  const cat = getRoofs(w);
+  let onUs = 0, near = 0;
+  for (let i = 0;i < bb.nEn; i++) {
+    const e = bb.en[i];
+    const shooting = bb.t - e.tShotAtUs < 3 || e.aimingAtUs && bb.los[e.id] === 1;
+    if (shooting || e.dist < P.fortNearR)
+      onUs++;
+    if (shooting || e.dist < P.fortR)
+      near++;
+  }
+  const hurtByMech = bb.t - bb.tHurt < 2 && bb.lastHurtBy >= 0 && bb.lastHurtBy < 100;
+  if (near > 0 || hurtByMech || bb.sounds.movementNear(1.5))
+    st.lastPurT = bb.t;
+  if (!st.on) {
+    if (bb.t < P.fortFrom || bb.t < st.retryT)
+      return false;
+    if (P.fortLaser > 0 && !bb.haveLaser)
+      return false;
+    const again = st.nTrig === 0 || near > 0;
+    const trig = P.fortOnUs > 0 && onUs >= P.fortOnUs || P.fortHp > 0 && bb.hpFrac < P.fortHp && near >= 2 || P.fortT < 999 && bb.t >= P.fortT && again || P.fortKills > 0 && kills >= P.fortKills && again;
+    if (!trig)
+      return false;
+    if (!pickRoof(bb, mv, st, cat, onUs)) {
+      st.retryT = bb.t + 5;
+      return false;
+    }
+    st.on = true;
+    st.tOn = bb.t;
+    st.nTrig++;
+    if (st.trigT < 0) {
+      st.trigT = bb.t;
+      st.trigD = st.travelD;
+    }
+    st.fails = 0;
+    st.lastPurT = bb.t;
+  }
+  let ci = st.ci;
+  if (bb.zone.marginAt(cat.x[ci], cat.y[ci], bb.t + P.fortRelocS) < 5) {
+    st.why = "zone";
+    if (bb.t - st.relocT < 3) {
+      release(st, bb.t, 20);
+      return false;
+    }
+    st.relocT = bb.t;
+    if (!pickRoof(bb, mv, st, cat, onUs, 0.6)) {
+      release(st, bb.t, 20);
+      return false;
+    }
+    st.nReloc++;
+    ci = st.ci;
+  }
+  const onRoof = onSurface(cat, bb.x, bb.y, bb.z, st.clId);
+  if (!onRoof) {
+    const sx = cat.x[ci], sy = cat.y[ci], sz = cat.z[ci];
+    const late = bb.t - st.travelT0 > st.travelD / 7 + 20;
+    const noPath = mv.unreachable && bb.t - st.travelT0 > 1.5;
+    if (late || noPath || bb.isBadGoal(sx, sy)) {
+      st.why = late ? "late" : noPath ? "nopath" : "badgoal";
+      if (st.bad)
+        st.bad[st.clId] = bb.t + 90;
+      if (++st.fails >= 3 || !pickRoof(bb, mv, st, cat, onUs)) {
+        release(st, bb.t, 30);
+        return false;
+      }
+      ci = st.ci;
+    }
+    st.arrT = -1;
+    const gx = cat.x[ci], gy = cat.y[ci], gz = cat.z[ci];
+    const need = mv.nav ? mv.nav.jetEnergy(cat.h[ci]) : 40;
+    const d = Math.hypot(gx - bb.x, gy - bb.y);
+    it.goto(gx, gy, gz, d > 25 && bb.energy > need + 25 ? PACE_BOOST : PACE_WALK, "fortGo");
+    it.arrive = 2;
+    it.allowJet = true;
+    it.forceJet = true;
+    it.face = FACE_THREATS;
+    if (target)
+      it.targetId = target.id;
+    return true;
+  }
+  if (st.arrT < 0) {
+    st.arrT = bb.t;
+    if (st.roofT < 0)
+      st.roofT = bb.t;
+  }
+  st.roofS += bb.dt;
+  st.fails = 0;
+  st.travelT0 = bb.t;
+  st.travelD = 30;
+  if (bb.t - st.lastPurT > P.fortQuietS && bb.t - st.arrT > P.fortQuietS) {
+    st.why = "quiet";
+    release(st, bb.t, 0);
+    return false;
+  }
+  let tg = target;
+  if (!tg || bb.los[tg.id] !== 1) {
+    let bd = 1e9;
+    for (let i = 0;i < bb.nEn; i++) {
+      const e = bb.en[i];
+      if (bb.los[e.id] === 1 && e.dist < bd) {
+        bd = e.dist;
+        tg = e;
+      }
+    }
+  }
+  let anyLine = false, closeLine = false;
+  for (let i = 0;i < bb.nEn; i++) {
+    const e = bb.en[i];
+    if (bb.los[e.id] !== 1)
+      continue;
+    anyLine = true;
+    if (e.dist < 45)
+      closeLine = true;
+  }
+  if (!closeLine && bb.t - st.spotT > (anyLine || bb.t - bb.tHurt < 2 ? 0.5 : 2)) {
+    st.spotT = bb.t;
+    chooseSpot(bb, mv, cat, st, ph);
+    ci = st.ci;
+  }
+  if (P.fortPeek > 0 && bb.las && bb.lasSlot >= 0) {
+    const las = bb.las;
+    if (st.peekOn) {
+      const e = bb.tracker.get(st.peekTgt);
+      const fired = bb.t - st.peekT0 > 0.4 && las.cooldown > 0.05 && (las.charge ?? 0) <= 0;
+      if (fired || bb.t - st.peekT0 > 4 || !e || !e.visible || e.dead || bb.t - bb.tHurt < 0.3 && bb.t - st.peekT0 > 1.5) {
+        st.peekOn = false;
+        st.peekNext = bb.t + 2;
+      } else {
+        if (bb.los[e.id] === 1)
+          it.hold(bb.x, bb.y, bb.z, "fortPk");
+        else
+          it.goto(st.peekX, st.peekY, st.peekZ, PACE_WALK, "fortPk");
+        it.arrive = 0.8;
+        it.stayUp = true;
+        it.allowJet = false;
+        it.targetId = e.id;
+        it.face = FACE_THREATS;
+        return true;
+      }
+    } else if (bb.t >= st.peekNext && !anyLine && las.cooldown <= 0.05 && bb.t - bb.tHurt > 1) {
+      let pe = null;
+      let bd = P.fortPeek;
+      for (let i = 0;i < bb.nEn; i++) {
+        const e = bb.en[i];
+        if (e.dist >= bd || e.dist > P.laserMaxDist || e.z > bb.z - 5)
+          continue;
+        bd = e.dist;
+        pe = e;
+      }
+      if (pe && findPeek(bb, cat, st, pe)) {
+        st.peekOn = true;
+        st.peekT0 = bb.t;
+        st.peekTgt = pe.id;
+        st.peeks++;
+        it.goto(st.peekX, st.peekY, st.peekZ, PACE_WALK, "fortPk");
+        it.arrive = 0.8;
+        it.stayUp = true;
+        it.allowJet = false;
+        it.targetId = pe.id;
+        it.face = FACE_THREATS;
+        return true;
+      }
+    }
+  }
+  if (P.fortCubeDist > 0 && !anyLine) {
+    const items = bb.loot.items;
+    let cube = null;
+    let cd = P.fortCubeDist;
+    for (let i = 0;i < items.length; i++) {
+      const c = items[i];
+      if (c.type !== L_CUBE || c.badUntil > bb.t)
+        continue;
+      const d = Math.hypot(c.x - bb.x, c.y - bb.y);
+      if (d >= cd || !onSurface(cat, c.x, c.y, c.z, st.clId))
+        continue;
+      cd = d;
+      cube = c;
+    }
+    if (cube) {
+      it.goto(cube.x, cube.y, cube.z, PACE_WALK, "fortCube");
+      it.arrive = 0.6;
+      it.stayUp = true;
+      it.allowJet = false;
+      it.face = FACE_THREATS;
+      if (tg)
+        it.targetId = tg.id;
+      return true;
+    }
+  }
+  const sx = cat.x[ci], sy = cat.y[ci], sz = cat.z[ci];
+  if (Math.hypot(sx - bb.x, sy - bb.y) > 2.5) {
+    it.goto(sx, sy, sz, PACE_WALK, "fortMv");
+    it.arrive = 2;
+  } else {
+    if (st.holdT < 0 || Math.hypot(st.holdX - sx, st.holdY - sy) > 3) {
+      st.holdX = bb.x;
+      st.holdY = bb.y;
+      st.holdZ = bb.z;
+      st.holdT = bb.t;
+    }
+    it.hold(st.holdX, st.holdY, st.holdZ, "fort");
+    it.arrive = 1.2;
+  }
+  it.stayUp = true;
+  it.allowJet = false;
+  if (tg) {
+    it.targetId = tg.id;
+    it.face = FACE_THREATS;
+  } else {
+    let bd = 1e9, by = 0;
+    const trs = bb.tracker.mechs;
+    for (let i = 0;i < trs.length; i++) {
+      const e = trs[i];
+      if (!e.known || e.dead || e.id === bb.me.id || e.age(bb.t) > 20)
+        continue;
+      if (e.dist < bd) {
+        bd = e.dist;
+        by = Math.atan2(e.y - bb.y, e.x - bb.x);
+      }
+    }
+    if (bd < 1e9 && bb.t - bb.tHurt > 1.5) {
+      it.face = FACE_YAW;
+      it.faceYaw = by + 0.6 * Math.sin(bb.t * 1.3);
+    } else
+      it.face = bb.t - bb.tHurt < 1.5 ? FACE_THREATS : FACE_SCAN;
+  }
+  return true;
+}
+
 // src/bot/strategies/squad.ts
 class SquadScratch {
   zg = newZoneGoal();
@@ -7683,6 +8305,7 @@ class SquadScratch {
   trPlanT = -1e9;
   trOk = false;
   trBoost = false;
+  fort = new FortState;
 }
 function huntLead(bb, sc, soundS) {
   let lead = null;
@@ -8511,6 +9134,22 @@ function decideSquadCore(bb, mv, sc) {
     zoneIntent(bb, sc.zg, it, target);
     weaponReflex(bb, it);
     return it;
+  }
+  if (fortEnabled(bb)) {
+    let ph = null;
+    if (bb.t - bb.tHurt < 2.5 && bb.lastHurtBy >= 0 && bb.lastHurtBy < 100) {
+      const tr = bb.tracker.get(bb.lastHurtBy);
+      if (!tr || !tr.visible) {
+        ph = sc.phantom;
+        ph.x = bb.x + 90 * Math.cos(bb.lastHurtBearing);
+        ph.y = bb.y + 90 * Math.sin(bb.lastHurtBearing);
+        ph.z = bb.world ? bb.world.groundZ(ph.x, ph.y) : bb.z;
+      }
+    }
+    if (fortress(bb, mv, sc.fort, it, target, sc.kills, ph)) {
+      weaponReflex(bb, it);
+      return it;
+    }
   }
   const safeDrop = P.dropSafeHp > 0;
   const lowHp = safeDrop && bb.hpFrac < P.dropSafeHp;
@@ -9530,9 +10169,9 @@ function segmentSeenFrac(world, ax, ay, az, bx, by, bz, height, enemies, n, step
 }
 
 // src/bot/cover/index.ts
-var cache3 = new WeakMap;
+var cache4 = new WeakMap;
 function createCover(world, nav, vision = DEFAULT_VISION) {
-  const hit = cache3.get(world);
+  const hit = cache4.get(world);
   if (hit && (hit.hasNav || !nav))
     return hit.cover;
   const t0 = performance.now();
@@ -9565,7 +10204,7 @@ function createCover(world, nav, vision = DEFAULT_VISION) {
       return field.flags[c] & 1 ? field.expo[c] / 255 : 1;
     }
   };
-  cache3.set(world, { cover, hasNav: !!nav });
+  cache4.set(world, { cover, hasNav: !!nav });
   return cover;
 }
 function withNav(opts, nav) {
@@ -10254,7 +10893,7 @@ function createBrain(ctx) {
       a.pick = pickUpgrade(bb, obs.offer);
     return a;
   };
-  return { name: BOT_NAME, act, bb, exec, mover, lastIntent: () => last };
+  return { name: BOT_NAME, act, bb, exec, mover, sc, lastIntent: () => last };
 }
 var mainBot = (ctx) => createBrain(ctx);
 
@@ -10272,20 +10911,40 @@ function warmup(bot, hello, decisions = 240) {
   if (!world)
     return;
   getExposure(world);
+  const roofs = getRoofs(world);
   const cfg = hello.config;
   const zc = cfg.zone.start_center;
-  for (let variant = 0;variant < 3; variant++) {
+  const P = bot.bb?.P;
+  const fortOn = !!P && (P.fortOnUs > 0 || P.fortT < 999 || P.fortHp > 0 || P.fortKills > 0);
+  let roofK = -1;
+  if (fortOn) {
+    for (let k = 0;k < roofs.n; k++) {
+      if (roofs.h[k] < 15 || Math.hypot(roofs.x[k] - zc[0], roofs.y[k] - zc[1]) > 300)
+        continue;
+      if (roofK < 0 || roofs.edge[k] > roofs.edge[roofK])
+        roofK = k;
+    }
+  }
+  for (let variant = 0;variant < (roofK >= 0 ? 4 : 3); variant++) {
+    let params = { forceMode: variant === 0 ? 2 : variant === 1 ? 1 : 0 };
+    if (variant === 3 && P) {
+      params = {};
+      for (const key in P)
+        if (key.startsWith("fort"))
+          params[key] = P[key];
+      Object.assign(params, { forceMode: 1, fortT: 1, fortFrom: 0, fortSafeR: 0, fortMaxDist: 1e4, fortZoneMargin: -1e4, fortMinH: 10, fortEdge: 6 });
+    }
     const ctx = {
       hello,
       world,
-      params: { forceMode: variant === 0 ? 2 : variant === 1 ? 1 : 0 },
+      params,
       rng: makeRng(1234 + variant),
       realtime: false,
       log: () => {}
     };
     const b = createBrain(ctx);
-    let x = zc[0] + 60 * variant - 40;
-    let y = zc[1] + 35 * variant;
+    let x = variant === 3 ? roofs.x[roofK] : zc[0] + 60 * variant - 40;
+    let y = variant === 3 ? roofs.y[roofK] : zc[1] + 35 * variant;
     let z = world.floorZ(x, y, 1000, 0);
     let yaw = 0;
     const stats = { ...cfg.mech };
@@ -10351,5 +11010,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-KTZ-s133.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 133, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, zoneGuard: 8, crateStandOff: 8 } });
+// src/entries/final-FE-s140.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 140, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, fortOnUs: 2, fortFrom: 45 } });

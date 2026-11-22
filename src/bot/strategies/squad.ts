@@ -16,6 +16,7 @@ import { FACE_SCAN, FACE_THREATS, FACE_YAW, K_FIGHT, PACE_BOOST, PACE_WALK, STYL
 import { newSpot, type Mover } from "../brain/navx.ts"
 import { cellOf, F_STAND, getExposure } from "../cover/exposure.ts"
 import { decideFfa } from "./ffa.ts"
+import { FortState, fortEnabled, fortress } from "../brain/fortress.ts"
 import {
   bestLoot, duelRange, fightRatio, healUntil, lootIntent, newLootChoice, newZoneGoal, pickTarget, pickupValue, wantDrop, weaponReflex, zoneDuty, zoneIntent,
   zoneOutside,
@@ -92,6 +93,8 @@ export class SquadScratch {
   trPlanT = -1e9
   trOk = false
   trBoost = false
+  /** roof fortress variant (brain/fortress.ts) */
+  readonly fort = new FortState()
 }
 
 /**
@@ -920,6 +923,25 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     zoneIntent(bb, sc.zg, it, target)
     weaponReflex(bb, it)
     return it
+  }
+
+  // 1'. roof fortress variant: from a trigger (pack on us / time / hurt / kills) hold the interior of a tall roof in
+  // the next circle, out of the line of the ground, shooting whoever comes over the edge
+  if (fortEnabled(bb)) {
+    let ph: Track | null = null
+    if (bb.t - bb.tHurt < 2.5 && bb.lastHurtBy >= 0 && bb.lastHurtBy < 100) {
+      const tr = bb.tracker.get(bb.lastHurtBy)
+      if (!tr || !tr.visible) {
+        ph = sc.phantom
+        ph.x = bb.x + 90 * Math.cos(bb.lastHurtBearing)
+        ph.y = bb.y + 90 * Math.sin(bb.lastHurtBearing)
+        ph.z = bb.world ? bb.world.groundZ(ph.x, ph.y) : bb.z
+      }
+    }
+    if (fortress(bb, mv, sc.fort, it, target, sc.kills, ph)) {
+      weaponReflex(bb, it)
+      return it
+    }
   }
 
   // 2. supply drop

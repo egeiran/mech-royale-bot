@@ -8,6 +8,7 @@ import type { ActorObs } from "../../protocol/mechfight.ts"
 import { makeRng } from "../../util/rng.ts"
 import { createBrain, type BrainBot } from "./index.ts"
 import { getExposure } from "../cover/exposure.ts"
+import { getRoofs } from "./fortress.ts"
 
 function selfWeapons(cfg: Hello["config"], second: "lightning" | "laser" | null): Observation["self"]["weapons"] {
   const g = cfg.weapons.gun
@@ -23,20 +24,38 @@ export function warmup(bot: Bot, hello: Hello, decisions = 240): void {
   // static exposure field (~40 ms to decode the first time): fetch it before `ready` so no mid-match decision pays
   // for it (squad snipePost / kiteTrain use it; the FFA ghost builds its cover module from it)
   getExposure(world)
+  // roof fortress catalogue (~2 ms on top of the field)
+  const roofs = getRoofs(world)
   const cfg = hello.config
   const zc = cfg.zone.start_center
-  for (let variant = 0; variant < 3; variant++) {
+  // a 4th run standing on a roof when the real bot plays the roof fortress (its fort* params, triggered at once)
+  const P = (bot as Partial<BrainBot>).bb?.P as Record<string, number> | undefined
+  const fortOn = !!P && (P.fortOnUs! > 0 || P.fortT! < 999 || P.fortHp! > 0 || P.fortKills! > 0)
+  let roofK = -1
+  if (fortOn) {
+    for (let k = 0; k < roofs.n; k++) {
+      if (roofs.h[k]! < 15 || Math.hypot(roofs.x[k]! - zc[0], roofs.y[k]! - zc[1]) > 300) continue
+      if (roofK < 0 || roofs.edge[k]! > roofs.edge[roofK]!) roofK = k
+    }
+  }
+  for (let variant = 0; variant < (roofK >= 0 ? 4 : 3); variant++) {
+    let params: Record<string, number> = { forceMode: variant === 0 ? 2 : variant === 1 ? 1 : 0 }
+    if (variant === 3 && P) {
+      params = {}
+      for (const key in P) if (key.startsWith("fort")) params[key] = P[key]!
+      Object.assign(params, { forceMode: 1, fortT: 1, fortFrom: 0, fortSafeR: 0, fortMaxDist: 1e4, fortZoneMargin: -1e4, fortMinH: 10, fortEdge: 6 })
+    }
     const ctx: BotContext = {
       hello,
       world,
-      params: { forceMode: variant === 0 ? 2 : variant === 1 ? 1 : 0 },
+      params,
       rng: makeRng(1234 + variant),
       realtime: false,
       log: () => {},
     }
     const b = createBrain(ctx)
-    let x = zc[0] + 60 * variant - 40
-    let y = zc[1] + 35 * variant
+    let x = variant === 3 ? roofs.x[roofK]! : zc[0] + 60 * variant - 40
+    let y = variant === 3 ? roofs.y[roofK]! : zc[1] + 35 * variant
     let z = world.floorZ(x, y, 1e3, 0)
     let yaw = 0
     const stats: Record<string, number> = { ...cfg.mech }

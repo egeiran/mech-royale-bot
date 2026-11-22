@@ -15,6 +15,8 @@ export interface BrainBot extends Bot {
   readonly bb: Blackboard
   readonly exec: Executor
   readonly mover: Mover
+  /** squad strategy scratch (eval harnesses read variant state from it) */
+  readonly sc: SquadScratch
   /** intent of the last decision (for timelines / debugging) */
   lastIntent(): Intent
 }
@@ -45,7 +47,7 @@ export function createBrain(ctx: BotContext): BrainBot {
     return a
   }
 
-  return { name: BOT_NAME, act, bb, exec, mover, lastIntent: () => last }
+  return { name: BOT_NAME, act, bb, exec, mover, sc, lastIntent: () => last }
 }
 
 export const mainBot: BotFactory = (ctx: BotContext): Bot => createBrain(ctx)

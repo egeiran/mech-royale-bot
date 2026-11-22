@@ -70,6 +70,8 @@ export class Executor {
   private my = 0
   private jump = false
   private boost = false
+  /** intent.stayUp of the current decision (blockedFn also refuses drops) */
+  private stayUp = false
 
   constructor(bb: Blackboard, mv: Mover) {
     this.bb = bb
@@ -77,7 +79,7 @@ export class Executor {
     this.jitter = new StrafeJitter(bb.P.strafeMin, bb.P.strafeMax)
     this.scanPhase = bb.rng.range(0, Math.PI * 2)
     this.spinDir = bb.rng.next() < 0.5 ? 1 : -1
-    this.blockedFn = (dx: number, dy: number) => this.mv.blocked(this.bb, dx, dy, this.bb.P.probeDist)
+    this.blockedFn = (dx: number, dy: number) => this.mv.blocked(this.bb, dx, dy, this.bb.P.probeDist) || (this.stayUp && this.dropAhead(dx, dy))
     this.groundFn = (x: number, y: number) => this.bb.world.groundZ(x, y)
   }
 
@@ -89,6 +91,7 @@ export class Executor {
     const a: BotAction = {}
     this.mx = this.my = 0
     this.jump = this.boost = false
+    this.stayUp = it.stayUp
 
     // ---- progress bookkeeping (for the eval)
     const st = this.stats
@@ -112,7 +115,7 @@ export class Executor {
         if (tr && tr.known) this.gotoMove(tr.x, tr.y, tr.z, true, 3)
       }
     } else if (it.kind !== K_IDLE) {
-      this.mv.goto(bb, it.gx, it.gy, it.gz, it.allowJet && bb.nThreats === 0 && bb.t - bb.tHurt > 3, it.arrive)
+      this.mv.goto(bb, it.gx, it.gy, it.gz, it.allowJet && (it.forceJet || (bb.nThreats === 0 && bb.t - bb.tHurt > 3)), it.arrive)
       this.mx = this.mv.mx
       this.my = this.mv.my
       this.jump = this.mv.jump
@@ -401,6 +404,8 @@ export class Executor {
       const base = Math.atan2(this.my, this.mx)
       const turn = this.unstickN % 4 === 1 ? 0 : this.unstickN % 4 === 2 ? 1.4 : this.unstickN % 4 === 3 ? -1.4 : Math.PI
       this.unstickYaw = base + turn
+      // roof guard: never hop toward a drop
+      for (let k = 0; k < 4 && this.stayUp && this.dropAhead(Math.cos(this.unstickYaw), Math.sin(this.unstickYaw)); k++) this.unstickYaw += Math.PI / 2
       this.unstickUntil = bb.t + 1.4
       this.slowRun = 0
     }
@@ -455,6 +460,20 @@ export class Executor {
     if (!w) return true
     const m = this.aimer
     return w.segClear(m.bx, m.by, m.bz, m.ex, m.ey, m.ez)
+  }
+
+  /** roof guard (intent.stayUp): the floor probeDist + radius ahead is more than 2 m below our feet */
+  private dropAhead(dx: number, dy: number): boolean {
+    const bb = this.bb
+    const l = Math.hypot(dx, dy)
+    if (l < 1e-6) return false
+    const r = bb.P.probeDist + bb.radius
+    const w = bb.world
+    for (let k = 1; k <= 2; k++) {
+      const f = (k * r) / 2 / l
+      if (w.floorZ(bb.x + dx * f, bb.y + dy * f, bb.z + 1.3, 0) < bb.z - 2) return true
+    }
+    return false
   }
 
   /** the track when it is alive and present in this observation */

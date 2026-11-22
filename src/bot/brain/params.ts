@@ -221,6 +221,41 @@ export const DEFAULTS = {
   kiteTrainDist: 0,
   /** ... never before this match time (s) */
   kiteTrainFrom: 0,
+  // ---- SQUAD roof fortress (fortress.ts; all off by default: fortOnUs 0 + fortT 999 + fortHp 0 + fortKills 0)
+  /** trigger: at least this many visible mechs on us at once (shot at us within 3 s, aiming at us with a line, or
+   *  within fortNearR) */
+  fortOnUs: 0,
+  fortNearR: 60,
+  /** trigger: from this match time (s) on (after a quiet release only again with a pursuer in sight) */
+  fortT: 999,
+  /** trigger: HP fraction below this with >= 2 pursuers (visible within fortR) */
+  fortHp: 0,
+  /** trigger: after this many kills (with a pursuer in sight) */
+  fortKills: 0,
+  /** no trigger before this match time (s); 1 = only while holding a laser */
+  fortFrom: 0,
+  fortLaser: 0,
+  /** roof: >= fortMinH m above the terrain, interior >= fortEdge m from every edge, <= fortMaxDist m away, inside the
+   *  next circle by fortZoneMargin and inside the circle at arrival + fortStayS */
+  fortMinH: 18,
+  fortEdge: 10,
+  /** ... and a safe radius (edge + edge (h - 7) / (body height / 2): ground muzzles closer than this have no line
+   *  to our centre) of at least fortSafeR m */
+  fortSafeR: 90,
+  fortMaxDist: 160,
+  fortZoneMargin: 20,
+  fortStayS: 40,
+  /** relocate when the spot leaves the circle within fortRelocS s (to a roof with 60 % of fortSafeR / fortZoneMargin) */
+  fortRelocS: 40,
+  /** pursuer radius (visible mechs) for the quiet timer / HP trigger; release after fortQuietS s on the roof with no
+   *  pursuer seen / heard near / damage by a mech */
+  fortR: 150,
+  fortQuietS: 25,
+  /** peek-snipe: laser ready, a visible ground mech within fortPeek m we have no line to -> step toward the edge
+   *  until we have one, fire, step back (0 = off) */
+  fortPeek: 0,
+  /** collect cubes on our roof within this distance (m) */
+  fortCubeDist: 30,
   /** kite style: preferred distance */
   rangeKite: 14,
   /** width of the dead band around the preferred range in which we only strafe */

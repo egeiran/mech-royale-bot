@@ -47,6 +47,10 @@ export class Intent {
   allowJet = true
   /** jet straight up (jump when grounded, jets in the air), no horizontal move: the opening jet scan */
   jetUp = false
+  /** allowJet even while under fire / just hurt (the executor normally plans on foot then): roof fortress travel */
+  forceJet = false
+  /** stay on this level: footwork / dodge / strafe never step toward a drop of more than 2 m (roof fortress) */
+  stayUp = false
   /** fight: pursue the target with boost (finish a fleeing, nearly dead target) */
   chase = false
   /** mech / NPC to shoot (track id), -1 = none */
@@ -80,6 +84,8 @@ export class Intent {
     this.arrive = 2
     this.allowJet = true
     this.jetUp = false
+    this.forceJet = false
+    this.stayUp = false
     this.chase = false
     this.targetId = -1
     this.style = STYLE_PUSH

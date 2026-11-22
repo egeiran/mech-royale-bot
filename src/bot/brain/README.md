@@ -124,6 +124,25 @@ analysis `data/tmp/play/an2.py`, `ab.py`; the client records the live intent per
   back when closer, give a crate up for 30 s after 5 s standing at it without denting it (parked 0.6 m from a crate
   for 58 s). Sim 96 seeds `zoneGuard 8 + crateStandOff 8`: 6.91 -> 6.92, flip-flop 114 -> 42 s, crate stall 365 -> 71 s.
 
+## Roof fortress (fortress agent, 2026-11-22 morning; all off by default; fortress.ts)
+`fortress.ts` + squad.ts step 1' (right after the urgent zone step). Triggers (any): `fortOnUs` (>= N visible mechs
+shooting / aiming with a line / within `fortNearR`), `fortT` (match time; after a quiet release again only with a
+pursuer in sight), `fortHp` (+ >= 2 pursuers), `fortKills`; `fortFrom`, `fortLaser`. Roof catalogue (static per World,
+~2 ms, warmup.ts prefetches it and, when fort* is on, warms the code on a roof): exposure-field roof cells, >= 6 m from
+every edge, grouped by surface, stadium excluded. Pick: `fortMinH` / `fortEdge` / safe radius `fortSafeR` (edge + edge
+(h - 7) / (body h / 2): no ground muzzle closer than that has a line to our centre) / climbable with 85 % energy /
+`fortMaxDist` / next circle by `fortZoneMargin` and inside at arrival + `fortStayS`; score travel x (1 + 0.25 onUs) +
+exposure - safe radius / 12 + pursuers closer to it than us. Travel with jets even under fire (`intent.forceJet`); give a
+roof up on no path / watchdog bad goal / late (3 failures -> release 30 s). On the roof (`intent.stayUp`: footwork, dodge,
+strafe and hop-out never step toward a drop): hold the deepest cell (body must fit) on the far side from the pursuers,
+moving out of the line of known shooters (0.5 s re-check, hysteresis, frozen while fighting an arrival < 45 m), shoot
+mechs with a line first, collect cubes on the roof (`fortCubeDist`), optional peek-snipe (`fortPeek`), relocate when
+the circle leaves the spot within `fortRelocS` (60 % requirements; loop guard), release after `fortQuietS` with no
+pursuer seen / heard near / damage. Sim (48 seeds, final-s0 + params, vs league squad; base 7.40): `fortOnUs 2 /
+fortFrom 45` 6.67, `fortT 90` 7.29, `fortOnUs 3 / fortFrom 60` 7.10: sim hunters climb (~1 per match) but also
+jet-jump-shoot from 8-16 m within 80 m and shoot from 80-130 m ground; on the roof we deal 81-112 HP/s vs take 29-47
+(off roof 130-180 vs 40-70): same ratio, half the tempo. Harness: scratch fh.ts (not kept).
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,
