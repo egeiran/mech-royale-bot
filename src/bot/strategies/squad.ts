@@ -931,6 +931,8 @@ function exploreUnseen(bb: Blackboard, sc: SquadScratch): boolean {
       if (seen[j * nx + i]) continue
       const cx = b.minX + (i + 0.5) * EX_CELL, cy = b.minY + (j + 0.5) * EX_CELL
       if (bb.zone.marginNext(cx, cy) < 15) continue
+      // laser hunt variant: not into the middle of the map (being within reach of many hunters costs)
+      if (bb.P.laserHuntCentre > 0 && Math.hypot(cx - bb.zone.ncx, cy - bb.zone.ncy) < bb.P.laserHuntCentre) continue
       const d = Math.hypot(cx - bb.x, cy - bb.y)
       if (d < bd) {
         bd = d
@@ -1411,6 +1413,27 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     if (!target) it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
     weaponReflex(bb, it)
     return it
+  }
+
+  // 5'''. laser hunt first variant: no laser held or known -> loot only within laserHuntLoot m, else walk to the
+  // nearest unseen area (pickups are only listed while in sight; ground lasers hidden from the spawn show up on the way)
+  if (P.laserHuntFirst > 0 && !bb.haveLaser && zl < 1 && bb.hpFrac >= healUntil(bb) && bb.t < P.laserHuntUntil && bb.nearestLaserDist() > 1e8) {
+    if (bestLoot(bb, false, P.laserHuntLoot, sc.lc)) {
+      lootIntent(bb, sc.lc, it, PACE_WALK)
+      it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
+      if (target && it.targetId < 0 && it.shootCrate < 0) it.targetId = target.id
+      weaponReflex(bb, it)
+      return it
+    }
+    if (exploreUnseen(bb, sc)) {
+      it.goto(sc.exX, sc.exY, bb.world ? bb.world.groundZ(sc.exX, sc.exY) : bb.z, travelPace(bb, sc.exX, sc.exY), "lhunt")
+      it.arrive = 8
+      it.allowJet = false
+      it.face = FACE_SCAN
+      if (target) it.targetId = target.id
+      weaponReflex(bb, it)
+      return it
+    }
   }
 
   // 5''. tempo variants (nobody engaged, HP >= seekHp, no zone duty): no NPC / crate farming and no far loot;

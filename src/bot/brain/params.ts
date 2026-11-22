@@ -185,6 +185,12 @@ export const DEFAULTS = {
    *  (style 1 values it 15, below cubes / crates / NPCs). 0 = off */
   ltgNoLasVal: 0,
   ltgNoLasT: 20,
+  /** laser hunt first: with no laser held or known (and not hurt, no zone duty, t < laserHuntUntil) take loot only
+   *  within laserHuntLoot m and otherwise walk to the nearest unseen 50 m cell (laserHuntSeenR), never to a cell within
+   *  laserHuntCentre m of the next circle's centre (0 = no limit); before the farming loot step. 0 = off */
+  laserHuntFirst: 0,
+  laserHuntLoot: 45,
+  laserHuntCentre: 0,
   /** crate reflex while no laser is held: these replace crateReflexDist / crateReflexSafe (0 = keep) */
   crateNoLasDist: 0,
   crateNoLasSafe: 0,

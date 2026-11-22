@@ -6745,6 +6745,9 @@ var DEFAULTS = {
   jetPeekUntil: 150,
   ltgNoLasVal: 0,
   ltgNoLasT: 20,
+  laserHuntFirst: 0,
+  laserHuntLoot: 45,
+  laserHuntCentre: 0,
   crateNoLasDist: 0,
   crateNoLasSafe: 0,
   finishChaseHp: 0,
@@ -9186,6 +9189,8 @@ function exploreUnseen(bb, sc) {
       const cx = b.minX + (i + 0.5) * EX_CELL, cy = b.minY + (j + 0.5) * EX_CELL;
       if (bb.zone.marginNext(cx, cy) < 15)
         continue;
+      if (bb.P.laserHuntCentre > 0 && Math.hypot(cx - bb.zone.ncx, cy - bb.zone.ncy) < bb.P.laserHuntCentre)
+        continue;
       const d = Math.hypot(cx - bb.x, cy - bb.y);
       if (d < bd) {
         bd = d;
@@ -9635,6 +9640,26 @@ function decideSquadCore(bb, mv, sc) {
       it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
     weaponReflex(bb, it);
     return it;
+  }
+  if (P.laserHuntFirst > 0 && !bb.haveLaser && zl < 1 && bb.hpFrac >= healUntil(bb) && bb.t < P.laserHuntUntil && bb.nearestLaserDist() > 1e8) {
+    if (bestLoot(bb, false, P.laserHuntLoot, sc.lc)) {
+      lootIntent(bb, sc.lc, it, PACE_WALK);
+      it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
+      if (target && it.targetId < 0 && it.shootCrate < 0)
+        it.targetId = target.id;
+      weaponReflex(bb, it);
+      return it;
+    }
+    if (exploreUnseen(bb, sc)) {
+      it.goto(sc.exX, sc.exY, bb.world ? bb.world.groundZ(sc.exX, sc.exY) : bb.z, travelPace(bb, sc.exX, sc.exY), "lhunt");
+      it.arrive = 8;
+      it.allowJet = false;
+      it.face = FACE_SCAN;
+      if (target)
+        it.targetId = target.id;
+      weaponReflex(bb, it);
+      return it;
+    }
   }
   const post = P.snipePost === 1 && bb.haveLaser;
   if ((P.tempoHunt > 0 || post) && zl < 1 && !sc.passive && bb.hpFrac >= P.seekHp) {
@@ -11420,5 +11445,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/v4-farm2-laserhunt-fastrush.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, laserHunt: 1, laserHuntUntil: 120, targetLaserBonus: 6, duelLaserDist: 60, lootClearWpn: 30, jetScan: 28, laserRush: 300, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1 } });
+// src/entries/v4-farm2-fastrush-gun55.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1, rushZone1: 1, rangeGunOnly: 55 } });
