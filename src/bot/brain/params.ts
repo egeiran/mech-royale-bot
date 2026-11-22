@@ -184,6 +184,10 @@ export const DEFAULTS = {
   /** supply drop: skip it when our walk eta exceeds its lands_in by more than this many s (0 = off; play server:
    *  the drop intent took 24 % of alive time, mostly 300-380 m walks that arrived after someone else's capture) */
   dropMaxLateS: 0,
+  /** supply drop (r1-opt): no drop goal from this match time on (s; 999 = off; the 165 s drop lands in the swarm) */
+  dropUntil: 999,
+  /** ... and none before this match time (s; 0 = off; e.g. 120 skips the 95 s drop, keeps the 165 s one) */
+  dropFrom: 0,
   /** gun only (no laser, no lightning): preferred duel distance against every mech, whatever it carries (0 = off;
    *  the range* keys apply). Real: <25 m 145/195 dealt/taken HP/s, 25-45 m 83/79, 45-65 m 88/64, 65-85 m 33/20 */
   rangeGunOnly: 0,
@@ -243,6 +247,29 @@ export const DEFAULTS = {
   /** ... train kiting stands and shoots the primary instead of running while the damage race against everyone with
    *  a line on us (fightRatio) is at least this (0 = off) */
   focusStandRatio: 0,
+  /** SQUAD two-phase play (focus agent; off by default): from phaseT s these replace their base params when >= 0
+   *  (-1 = keep): engageDist, seekSoundS, valNpc, valCrate, valCube (e.g. farm first with the FARM values, then KT's) */
+  phaseT: 0,
+  phEngageDist: -1,
+  phSeekSoundS: -1,
+  phValNpc: -1,
+  phValCrate: -1,
+  phValCube: -1,
+  /** ... (r1-opt) the same switch also fires once we hold phaseCubes cubes or have made phaseKills kills (0 = off) */
+  phaseCubes: 0,
+  phaseKills: 0,
+  /** SQUAD: no walking to known / heard mechs (decision step 6) before this match time (s; 0 = off) */
+  seekFrom: 0,
+  /** SQUAD "spare" pacing (r1-opt; off by default): while we are weak (cubes < spareCubes, or spareLaser 1 and no
+   *  laser) and before spareUntil s, a mech target below spareHp HP fraction is not finished: no fire at it and no
+   *  fight branch (we farm / take cover instead) while fewer than spareOnUs OTHER mechs are on us and our own HP
+   *  fraction is at least spareSelfHp. Kills bring more hunters in the kill-driven squad model (R1). 0 = off */
+  spareHp: 0,
+  spareCubes: 0,
+  spareLaser: 0,
+  spareUntil: 999,
+  spareSelfHp: 0.4,
+  spareOnUs: 1,
   // ---- SQUAD roof fortress (fortress.ts; all off by default: fortOnUs 0 + fortT 999 + fortHp 0 + fortKills 0)
   /** trigger: at least this many visible mechs on us at once (shot at us within 3 s, aiming at us with a line, or
    *  within fortNearR) */

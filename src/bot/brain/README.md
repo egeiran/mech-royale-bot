@@ -143,6 +143,15 @@ fortFrom 45` 6.67, `fortT 90` 7.29, `fortOnUs 3 / fortFrom 60` 7.10: sim hunters
 jet-jump-shoot from 8-16 m within 80 m and shoot from 80-130 m ground; on the roof we deal 81-112 HP/s vs take 29-47
 (off roof 130-180 vs 40-70): same ratio, half the tempo. Harness: scratch fh.ts (not kept).
 
+## Focus fire / kill confirmation / phases (focus agent, 2026-11-22 morning; all off by default)
+squad.ts `focusTarget` / `focusFinish`, params `focus*`, `phaseT` + `ph*`, `seekFrom` (see params.ts). Sim, KT params,
+384 seeds per squad model (A2 = calib3 best fit, C2, B1, R1 = +1 hunter per kill, v2 default), late = after 72 s:
+regen undoes only 3.5-5 % of our late mech damage, abandoned damage 5-8 %, damage left on live mechs at our death
+14-27 %, recent damage on other mechs at each late kill 250-400 HP; late output 150-195 HP/s, 2150-2300 HP per kill
+(target max HP ~1830): conversion is fine, survival limits. `focusFire 1`: A2 -0.02, v2 -0.15 (no gain).
+`focusFinishHp 0.3 + focusFinishCrowd 1`: KT A2 +0.21 +- 0.14, v2 -0.20; FARM C2 +0.38, A2/B1/R1 -0.05..-0.11.
+FARM vs KT: -0.4..-0.9 in every time-scheduled model (fewer cubes: kills are the cube source), +0.07 (+8 s alive) in R1.
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,

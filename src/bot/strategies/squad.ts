@@ -97,6 +97,8 @@ export class SquadScratch {
   fcId = -1
   fcLineT = -1e9
   fcT = -1e9
+  /** two-phase play: the phaseT switch has been applied */
+  phDone = false
   /** roof fortress variant (brain/fortress.ts) */
   readonly fort = new FortState()
 }
@@ -449,6 +451,21 @@ function focusFinish(bb: Blackboard, e: Track): boolean {
     if (n > P.focusFinishCrowd) return false
   }
   return true
+}
+
+/** spare pacing (P.spareHp > 0): e is a mech below spareHp that we leave alive for now - we are still weak (cubes <
+ *  spareCubes / no laser with spareLaser 1), before spareUntil, our HP fraction >= spareSelfHp and fewer than
+ *  spareOnUs other mechs on us (shot at us within 3 s or aiming at us with a line) */
+function spareNow(bb: Blackboard, e: Track): boolean {
+  const P = bb.P
+  if (e.npc || bb.t >= P.spareUntil || hpFracOf(e) >= P.spareHp || bb.hpFrac < P.spareSelfHp) return false
+  if (!((P.spareCubes > 0 && bb.cubes < P.spareCubes) || (P.spareLaser > 0 && !bb.haveLaser))) return false
+  let n = 0
+  for (let i = 0; i < bb.nEn; i++) {
+    const o = bb.en[i]
+    if (o !== e && !o.npc && (bb.t - o.tShotAtUs < 3 || (o.aimingAtUs && bb.los[o.id] === 1))) n++
+  }
+  return n < P.spareOnUs
 }
 
 /**
@@ -941,6 +958,11 @@ export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent
     }
     if (!threat) it.weaponsFree = false
   }
+  // spare pacing variant: hold fire on a nearly dead mech we leave alive for now
+  if (P.spareHp > 0 && it.weaponsFree && it.targetId >= 0 && it.targetId < 100) {
+    const tr = bb.tracker.get(it.targetId)
+    if (tr && tr.visible && spareNow(bb, tr)) it.weaponsFree = false
+  }
   return it
 }
 
@@ -949,6 +971,15 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   const m = bb.mem
   const evs = bb.obs.events
   for (let i = 0; i < evs.length; i++) if (evs[i].type === "kill") sc.kills++
+  // two-phase variant: from phaseT the ph* values replace their base params (bb.P is this bot's own copy)
+  if (!sc.phDone && ((P.phaseT > 0 && bb.t >= P.phaseT) || (P.phaseCubes > 0 && bb.cubes >= P.phaseCubes) || (P.phaseKills > 0 && sc.kills >= P.phaseKills))) {
+    sc.phDone = true
+    if (P.phEngageDist >= 0) P.engageDist = P.phEngageDist
+    if (P.phSeekSoundS >= 0) P.seekSoundS = P.phSeekSoundS
+    if (P.phValNpc >= 0) P.valNpc = P.phValNpc
+    if (P.phValCrate >= 0) P.valCrate = P.phValCrate
+    if (P.phValCube >= 0) P.valCube = P.phValCube
+  }
 
   // survivor mode: from a time / kill count / number of mechs on us, stop hunting and play the ghost (hide, break
   // line of sight, heal) to outlast the squad until the zone collapse (alive at the end = 1st place)
@@ -1102,7 +1133,8 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   const engD0 = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist
   const engD = sc.passive ? Math.min(engD0, P.openEngageDist) : engD0
   const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2)
-  if (target && engaged) {
+  // spare pacing variant: a nearly dead lone mech is left alive while we are weak (we farm / take cover instead)
+  if (target && engaged && !(P.spareHp > 0 && spareNow(bb, target))) {
     sc.fought = true
     // no laser yet: go for a known one (boost), shooting on the way, unless this duel is nearly won
     const tHp = target.hp >= 0 && target.maxHp > 0 ? target.hp / target.maxHp : 1
@@ -1281,7 +1313,7 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     return it
   }
   // 6. healthy and alone: go and find the next mech (kill tempo) - the freshest known position
-  if (bb.hpFrac >= P.seekHp && !sc.passive) {
+  if (bb.hpFrac >= P.seekHp && !sc.passive && bb.t >= P.seekFrom) {
     let lead: Track | null = null
     const trs = bb.tracker.mechs
     for (let i = 0; i < trs.length; i++) {

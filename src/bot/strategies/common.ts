@@ -367,6 +367,7 @@ export function wantDrop(bb: Blackboard, enemyClear: number): number {
   const P = bb.P
   let best = -1
   let bs = 0
+  if (bb.t >= P.dropUntil || bb.t < P.dropFrom) return -1
   for (let i = 0; i < bb.drops.length; i++) {
     const d = bb.drops[i]
     const dist = Math.hypot(d.pos[0] - bb.x, d.pos[1] - bb.y)
