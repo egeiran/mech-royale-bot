@@ -444,7 +444,7 @@ function crateCalm(bb: Blackboard, target: Track | null): boolean {
   const P = bb.P
   if (bb.nThreats > 0 || bb.npcAggressor !== null || bb.t - bb.tHurt < 2) return false
   if (bb.nearest !== null && bb.nearestD < (P.crateNoLasSafe > 0 && !bb.haveLaser ? P.crateNoLasSafe : P.crateReflexSafe)) return false
-  if (bb.hpFrac < healUntil(bb) && bb.t > 20) return false
+  if (bb.hpFrac < healUntil(bb) && bb.t > 20 && !(P.crateHeal > 0)) return false
   if (target) {
     if (bb.t - target.tHitByUs < 3 || bb.t - target.tShotAtUs < 4) return false
     if (bb.haveLaser && bb.los[target.id] === 1 && target.dist <= P.laserMaxDist) return false

@@ -52,6 +52,10 @@ export const DEFAULTS = {
    *  only silent loot (no shots at crates / NPCs, which restart the 5 s regen delay); above it loud loot too.
    *  0.6 = the old hard-coded value; >= healUntil = always heal first */
   healLootHp: 0.6,
+  /** 1 = crate hits do not count as combat (real server: regen starts 5.0 s after the last mech/NPC hit or damage
+   *  taken even when a crate was shot 0-3 s earlier, 17 of 433 onsets in 20 showdowns): crates stay lootable and the
+   *  crate reflex stays on while hurt, and the blackboard's regen timer ignores crate hits */
+  crateHeal: 0,
 
   // ---------------------------------------------------------------- engagement range
   /** preferred duel distance with gun only */

@@ -416,7 +416,7 @@ export class Blackboard {
           this.lastHurtBy = e.by
           if (e.bearing !== null && e.bearing !== undefined) this.lastHurtBearing = e.bearing
         }
-      } else if (e.type === "hit") this.tCombat = obs.t
+      } else if (e.type === "hit" && !(this.P.crateHeal > 0 && e.target >= 1000 && e.target < 5000)) this.tCombat = obs.t
     }
     const regenDelay = st.regen_delay ?? 5
     this.regenIn = this.hp >= this.maxHp ? 0 : Math.max(0, this.tCombat + regenDelay - obs.t)
