@@ -111,6 +111,19 @@ damage taken per intent label after 72 s).
 - warmup.ts now fetches the exposure field before `ready` (first fetch ~37 ms; the eval harness has no warm-up, so
   its decision max shows it once per process).
 
+## Play-lab variants (play-lab agent, 2026-11-22 night; all off by default; data/intel/play2.md, data/tmp/play)
+Measured on the public play server (`src/tools/play-client.ts --src <frozen tree> --params forceMode=1 --ab k=v`,
+analysis `data/tmp/play/an2.py`, `ab.py`; the client records the live intent per decision).
+- `dropSafeHp` (HP fraction; no "hurt -> drop through a fight", below it only uncontested drops with nobody in sight)
+  + `dropMaxLateS` (s; skip drops we reach that long after they land; common.ts wantDrop). Play A/B 8 v 8: drop
+  deaths 3/8 -> 0 but kills 3.5 -> 2.1, dealt 56 -> 41 HP/s, first-minute damage -40 % (p 0.02), placement equal:
+  not worth it (the drop brawl is where the FFA kills are; freed time went into idling).
+- `zoneGuard` m (common.ts `zoneOutside`, bestLoot `zoneGuard` arg, squad.ts seek/hear/explore/laser rush): no goal
+  at zone level 0 where zoneDuty would switch to level 1 on arrival (the +-4 m zone/seek flip-flop, 31 s in one match).
+- `crateStandOff` m (common.ts lootIntent, squad.ts step 5): stop outside the gun's min-pitch cone from a crate, step
+  back when closer, give a crate up for 30 s after 5 s standing at it without denting it (parked 0.6 m from a crate
+  for 58 s). Sim 96 seeds `zoneGuard 8 + crateStandOff 8`: 6.91 -> 6.92, flip-flop 114 -> 42 s, crate stall 365 -> 71 s.
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,
