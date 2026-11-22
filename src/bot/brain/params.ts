@@ -353,6 +353,10 @@ export const DEFAULTS = {
   zoneAimFrac: 0.55,
   /** start drifting toward the next circle this long before its shrink starts */
   zoneEarlyS: 25,
+  /** SQUAD zone guard (m, 0 = off; play-lab, data/intel/play2.md L2): at zone level 0 skip seek / hear leads,
+   *  loot, NPCs and explore points lying where zoneDuty would switch to level 1 on arrival (+ this hysteresis),
+   *  and let the laser rush run at level 1 too: no walk-out / walk-in flip-flop at the next circle's edge */
+  zoneGuard: 0,
 
   // ---------------------------------------------------------------- stealth (FFA ghost)
   /** speed (m/s) used for silent walking (below sound.step_speed) */

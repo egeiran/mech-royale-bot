@@ -6802,6 +6802,7 @@ var DEFAULTS = {
   zoneSlackS: 10,
   zoneAimFrac: 0.55,
   zoneEarlyS: 25,
+  zoneGuard: 0,
   silentSpeed: 4.7,
   silentEnemyDist: 75,
   hideSearchR: 140,
@@ -8034,6 +8035,8 @@ function soundLead(bb, sc, maxAge = bb.P.seekSoundS) {
     const d = Math.hypot(x - bb.x, y - bb.y);
     if (d < 20 || bb.zone.margin(x, y) < 10)
       continue;
+    if (zoneOutside(bb, x, y, d / bb.walk))
+      continue;
     let sc2 = age + d / 12;
     if (bb.P.seekLaserBonus > 0 && !bb.haveLaser && (s.evKind[i] === S_LASER || s.evKind[i] === S_LASER_CHARGE))
       sc2 -= bb.P.seekLaserBonus;
@@ -8370,7 +8373,7 @@ function decideSquadCore(bb, mv, sc) {
   if (!hurt)
     m.regen = false;
   const recentEnemy = bb.t - bb.tEnemySeen < 6;
-  if (P.laserRush > 0 && !bb.haveLaser && zl < 1 && rushLaser(bb, P.laserRush, sc, true, target)) {
+  if (P.laserRush > 0 && !bb.haveLaser && zl < (P.zoneGuard > 0 ? 2 : 1) && rushLaser(bb, P.laserRush, sc, true, target)) {
     rushIntent(bb, sc, it, target);
     if (!target)
       it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
@@ -8433,7 +8436,7 @@ function decideSquadCore(bb, mv, sc) {
     weaponReflex(bb, it);
     return it;
   }
-  if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, P.lootMaxDist, sc.lc)) {
+  if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, P.lootMaxDist, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK);
     it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
     if (target && it.targetId < 0 && it.shootCrate < 0)
@@ -8473,6 +8476,8 @@ function decideSquadCore(bb, mv, sc) {
         continue;
       if (e.dist < 12 && age > 3)
         continue;
+      if (zoneOutside(bb, e.x, e.y, e.dist / bb.walk))
+        continue;
       if (!lead || age + e.dist / 12 < lead.age(bb.t) + lead.dist / 12)
         lead = e;
     }
@@ -8491,9 +8496,10 @@ function decideSquadCore(bb, mv, sc) {
       return it;
     }
   }
-  if (bb.t >= m.n2 || Math.hypot(m.n0 - bb.x, m.n1 - bb.y) < 8 || bb.zone.marginNext(m.n0, m.n1) < 10) {
+  if (bb.t >= m.n2 || Math.hypot(m.n0 - bb.x, m.n1 - bb.y) < 8 || bb.zone.marginNext(m.n0, m.n1) < (P.zoneGuard > 0 ? P.zoneMargin + P.zoneGuard : 10)) {
     const a = bb.rng.next() * Math.PI * 2;
-    const r = Math.sqrt(bb.rng.next()) * bb.zone.nr * 0.75;
+    const rMax = P.zoneGuard > 0 ? Math.max(0, Math.min(0.75 * bb.zone.nr, bb.zone.nr - P.zoneMargin - P.zoneGuard - 4)) : bb.zone.nr * 0.75;
+    const r = Math.sqrt(bb.rng.next()) * rMax;
     m.n0 = bb.zone.ncx + r * Math.cos(a);
     m.n1 = bb.zone.ncy + r * Math.sin(a);
     m.n2 = bb.t + 25;
@@ -10105,5 +10111,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-S-s83.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 83, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, dropSafeHp: 0.6, dropMaxLateS: 8 } });
+// src/entries/final-K-s90.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 90, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100 } });
