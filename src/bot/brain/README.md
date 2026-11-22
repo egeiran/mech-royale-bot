@@ -164,6 +164,19 @@ seeds each, M1 / MA / R1: `valDrop 0` +0.30 / +0.25 / +0.28 (the 95 s drop walk 
 +0.38 / +0.13; spare variants -0.35..-2.1 in M1 (kill tempo is the cube source); `engageDist 30` -0.19, upgrade
 orders +-0.1. Scripts (scratch, not kept): r1/rr.sh, mb.sh, scan.sh, sana.py.
 
+## Laser-2 variants (laser-2 agent, 2026-11-22 morning; all off by default; data/tmp/laser2)
+Harness `data/tmp/laser2/h.ts --base farm|farm2 --seats 2 --v --params k=v` (real layouts of every distinct live
+header, FARM / FARM2-nodrop params, sim squad, no replays; prints laser held by 15/30/45/60/90 s, kills, and a reason
+table for no laser at 45 s); `run.sh`, paired stats `pair.py`. FARM2 base: laser @45 s 70 %; of the rest 62 % never
+saw one (hidden ground lasers, median 152 m), 16 % got it after 45 s, 7 % fighting, 7 % died.
+- `rushRoofFight` m (squad.ts rushLaser: roof lasers up to this climb also mid-fight) + `rushForceJet` (rush travel
+  jets under fire): together +4.7 pp laser @45 s (alone +2.8 / 0). `rushZone1` (step 5' rush also at zone level 1)
+  +0.6. `rushNoScan` m (no jet scan when a ground laser is in sight at spawn) and `rushBoostHi` (rush boost with
+  hysteresis down to laserRushEnergy): ~0 at 45 s, laser ~2 s sooner. All six (150/60/20/25/1/1): +5.5 +- 1.3 pp.
+- No gain on FARM2: `crateNoLasDist/Safe` (crate reflex while no laser), `jetPeekS` (+`jetPeekE/Safe/From/Until`:
+  repeat the jet scan when calm and no laser known), `ltgNoLasVal/T` (lightning fallback, common.ts pickupValue),
+  `laserHuntFirst` (+`laserHuntLoot/Centre`: explore unseen cells before farming), jetScan 30 (-2.8).
+
 ## Centre hold (2026-11-22; off by default)
 `centerHold: 1` (squad.ts step 6''', replaces explore, after seek): walk (no boost, no jets) to an open ground cell
 (exposure field ground layer, >= 6 m from walls, same on-foot nav component) within `centerHoldR` (60) of the next
