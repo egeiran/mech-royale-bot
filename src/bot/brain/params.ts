@@ -164,7 +164,7 @@ export const DEFAULTS = {
   /** SQUAD "sniper post" (1 = on, needs a laser): nobody in sight -> stand on the most open ground spot (cover
    *  exposure field: long sightlines) within snipeR m inside the next circle and scan from there (no NPC / crate
    *  farming, cubes / weapons within tempoHuntLoot still taken); a laser target beyond the kite band with a clean
-   *  line and within snipeMaxDist is fought from where we stand (no approach walk) */
+   *  line and within snipeMaxDist is fought from where we stand (no approach walk). 2 = only that hold, no post */
   snipePost: 0,
   snipeR: 60,
   snipeMaxDist: 200,
@@ -172,6 +172,18 @@ export const DEFAULTS = {
    *  in a fight, from up to dropRefuelDist m, shooting on the way and from inside the ring (0 = off) */
   dropRefuelHp: 0,
   dropRefuelDist: 400,
+  /** SQUAD "drop drift": while a called supply drop lies within dropDriftDist m, duel footwork drifts toward it with
+   *  this weight (1 = as strong as the strafe; kite boosts prefer that side), so the fight is there when it lands
+   *  and the normal drop step can take it (0 = off) */
+  dropDrift: 0,
+  dropDriftDist: 300,
+  /** SQUAD "safe drop" (HP fraction, 0 = off; play-lab, data/intel/play2.md): no "hurt -> drop through a fight"
+   *  (hp < 75 % within 150 m); below this HP fraction a drop only with no mech in sight and none seen within
+   *  dropEnemyClear m of the ring in the last 8 s (play server: 6 of 10 deaths came walking into the drop brawl) */
+  dropSafeHp: 0,
+  /** supply drop: skip it when our walk eta exceeds its lands_in by more than this many s (0 = off; play server:
+   *  the drop intent took 24 % of alive time, mostly 300-380 m walks that arrived after someone else's capture) */
+  dropMaxLateS: 0,
   /** gun only (no laser, no lightning): preferred duel distance against every mech, whatever it carries (0 = off;
    *  the range* keys apply). Real: <25 m 145/195 dealt/taken HP/s, 25-45 m 83/79, 45-65 m 88/64, 65-85 m 33/20 */
   rangeGunOnly: 0,
@@ -179,6 +191,18 @@ export const DEFAULTS = {
    *  real gun hit rate >= 120 m 22 %, and the magazine is then empty when the target comes close) */
   gunFarDist: 0,
   gunFarHp: 0.25,
+  // ---- squad-dev variants (2026-11-22; data/tmp/squaddev; all off by default)
+  /** SQUAD crate reflex (m, 0 = off): no visible mech within crateReflexSafe, nobody shooting at us, no fight on:
+   *  stand still and shoot the best visible crate with a clean line within this distance until it breaks (give up
+   *  after crateReflexMaxS), then collect its cube / a dropped laser (lightning only with no laser known) for up to
+   *  crateCollectS s. Only started before crateReflexUntil s. crateScan 1: also lock onto such a crate during the
+   *  opening jet scan once a full turn is done (forensic.md #1: top bots stand and shoot crates from ~48 m) */
+  crateReflexDist: 0,
+  crateReflexSafe: 150,
+  crateReflexUntil: 999,
+  crateReflexMaxS: 4,
+  crateCollectS: 10,
+  crateScan: 0,
   /** kite style: preferred distance */
   rangeKite: 14,
   /** width of the dead band around the preferred range in which we only strafe */

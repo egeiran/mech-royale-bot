@@ -66,6 +66,10 @@ export class Intent {
   dropSlot = -1
   /** drop this slot without taking (-1 = no) */
   dropOnly = -1
+  /** fight footwork: drift toward (driftX, driftY) with this weight (0 = none; the drop-drift variant) */
+  driftW = 0
+  driftX = 0
+  driftY = 0
   /** short tag for debugging / the timeline */
   label = ""
 
@@ -87,6 +91,7 @@ export class Intent {
     this.takeId = -1
     this.dropSlot = -1
     this.dropOnly = -1
+    this.driftW = 0
     this.label = ""
     return this
   }

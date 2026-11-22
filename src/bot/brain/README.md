@@ -76,6 +76,21 @@ Harness on REAL layouts (live replay headers via `src/sim/loot.ts layoutHook`): 
 - `finishChaseHp` (+`finishChaseRange/Crowd`: boost after a fleeing nearly dead mech), `rangeGunOnly` (gun-only duel
   range vs every mech), `gunFarDist`/`gunFarHp` (no gun at healthy mechs beyond it without a laser).
 
+## Tempo variants (tempo agent, 2026-11-21 late; all off by default; data/tmp/tempo)
+Sim, final config + params, 384 seeds (two 192-seed halves) vs the league squad, base 6.90 / 6.76:
+- `tempoHunt: 1` (+`tempoHuntLoot/SoundS/Energy`): no fight -> boost to the freshest known (45 s) / heard (20 s)
+  mech, no NPC / crate farming or far loot (cubes / weapons within 40 m first). +0.15 / +0.23, kills by 60 s
+  2.91 -> 3.30 / 2.95 -> 3.22. The laser is otherwise ready with nobody in sight 32 % of its held time.
+- `snipePost: 1` (laser): nobody in sight -> stand on the most open ground spot (cover exposure field) within
+  `snipeR`, 10 s per post; `snipePost: 2` = only the duel part: a laser target beyond the kite band with a line and
+  within `snipeMaxDist` is fought from where we stand. 1: +0.01; 2: -0.22; `tempoHunt 1 + snipePost 2`: +0.46 / +0.20.
+- `dropRefuelHp` (+`dropRefuelDist`): go for a reachable drop through fights when hurt: -0.18 (captures 14 -> 20
+  of 192, but alive at 95 s 81 -> 74). `dropDrift` (+`dropDriftDist`; intent `driftW/X/Y` in fightMove): duel
+  footwork drifts toward a called drop: -0.09, captures 14 -> 16.
+Laser cycle (no change needed): in duels the laser is idle-ready only ~3 % of the time, median hold at full
+charge before release 0.1 s (mean 0.32, 9 % auto-fire after LOS loss). Tools: `data/tmp/tempo/run.sh`,
+`tempo_an.py` (kills by 60/100 s, first-100 s shares), `paired.py`, `laser_cyc.py`, `drop_an.py`.
+
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,
 `lightning*`, `laser*`, `reload*`; fight evaluation `enemyHitP0/HalfDist`, `squadDisengage*`, `squadRegenUntil`,

@@ -339,6 +339,8 @@ export function wantDrop(bb: Blackboard, enemyClear: number): number {
     const dist = Math.hypot(d.pos[0] - bb.x, d.pos[1] - bb.y)
     const eta = (dist / bb.walk) * 1.3
     if (d.lands_in > eta + P.dropLeadS) continue
+    // too far: we would arrive this long after it landed (others capture it first; play server: 300-380 m walks)
+    if (P.dropMaxLateS > 0 && eta - d.lands_in > P.dropMaxLateS) continue
     if (bb.zone.marginAt(d.pos[0], d.pos[1], bb.t + Math.max(eta, d.lands_in) + d.capture_s + 2) < 4) continue
     if (d.holder !== null && d.holder !== bb.me.id && d.capture_s - d.progress < eta) continue
     if (bb.isBadGoal(d.pos[0], d.pos[1])) continue

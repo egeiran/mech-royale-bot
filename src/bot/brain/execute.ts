@@ -593,6 +593,15 @@ export class Executor {
         my += (ay / al) * P.kiteAwayW
       }
     }
+    // drift toward a goal while fighting (drop-drift variant: the fight migrates to the supply drop)
+    if (it.driftW > 0) {
+      const gx = it.driftX - bb.x, gy = it.driftY - bb.y
+      const gl = Math.hypot(gx, gy)
+      if (gl > 6) {
+        mx += (gx / gl) * it.driftW
+        my += (gy / gl) * it.driftW
+      }
+    }
     // stay inside the circle
     const zm = bb.zone.margin(bb.x, bb.y)
     if (zm < P.zoneMargin) {
@@ -619,7 +628,11 @@ export class Executor {
         if (this.mv.walkOk(bb, bb.x + rx * 6, bb.y + ry * 6)) free = this.mv.walkOk(bb, bb.x + rx * 16, bb.y + ry * 16) ? 16 : 6
         if (free === 0) continue
         const zm2 = bb.zone.marginNext(bb.x + rx * 30, bb.y + ry * 30)
-        const sc = free * 1.5 - Math.abs(k) * 2 + (zm2 < 20 ? (zm2 - 20) * 0.5 : 0) + (k * side > 0 ? 1.5 : 0)
+        let sc = free * 1.5 - Math.abs(k) * 2 + (zm2 < 20 ? (zm2 - 20) * 0.5 : 0) + (k * side > 0 ? 1.5 : 0)
+        if (it.driftW > 0) {
+          const gl = Math.hypot(it.driftX - bb.x, it.driftY - bb.y)
+          if (gl > 6) sc += (4 * it.driftW * (rx * (it.driftX - bb.x) + ry * (it.driftY - bb.y))) / gl
+        }
         if (sc > bs) {
           bs = sc
           bx = rx

@@ -2540,6 +2540,9 @@ class Intent {
   takeId = -1;
   dropSlot = -1;
   dropOnly = -1;
+  driftW = 0;
+  driftX = 0;
+  driftY = 0;
   label = "";
   reset() {
     this.kind = K_IDLE;
@@ -2559,6 +2562,7 @@ class Intent {
     this.takeId = -1;
     this.dropSlot = -1;
     this.dropOnly = -1;
+    this.driftW = 0;
     this.label = "";
     return this;
   }
@@ -4670,6 +4674,14 @@ class Executor {
         my += ay / al * P.kiteAwayW;
       }
     }
+    if (it.driftW > 0) {
+      const gx = it.driftX - bb.x, gy = it.driftY - bb.y;
+      const gl = Math.hypot(gx, gy);
+      if (gl > 6) {
+        mx += gx / gl * it.driftW;
+        my += gy / gl * it.driftW;
+      }
+    }
     const zm = bb.zone.margin(bb.x, bb.y);
     if (zm < P.zoneMargin) {
       const cx = bb.zone.ncx - bb.x, cy = bb.zone.ncy - bb.y;
@@ -4695,7 +4707,12 @@ class Executor {
         if (free === 0)
           continue;
         const zm2 = bb.zone.marginNext(bb.x + rx * 30, bb.y + ry * 30);
-        const sc = free * 1.5 - Math.abs(k) * 2 + (zm2 < 20 ? (zm2 - 20) * 0.5 : 0) + (k * side > 0 ? 1.5 : 0);
+        let sc = free * 1.5 - Math.abs(k) * 2 + (zm2 < 20 ? (zm2 - 20) * 0.5 : 0) + (k * side > 0 ? 1.5 : 0);
+        if (it.driftW > 0) {
+          const gl = Math.hypot(it.driftX - bb.x, it.driftY - bb.y);
+          if (gl > 6)
+            sc += 4 * it.driftW * (rx * (it.driftX - bb.x) + ry * (it.driftY - bb.y)) / gl;
+        }
         if (sc > bs) {
           bs = sc;
           bx = rx;
@@ -6700,9 +6717,19 @@ var DEFAULTS = {
   snipeMaxDist: 200,
   dropRefuelHp: 0,
   dropRefuelDist: 400,
+  dropDrift: 0,
+  dropDriftDist: 300,
+  dropSafeHp: 0,
+  dropMaxLateS: 0,
   rangeGunOnly: 0,
   gunFarDist: 0,
   gunFarHp: 0.25,
+  crateReflexDist: 0,
+  crateReflexSafe: 150,
+  crateReflexUntil: 999,
+  crateReflexMaxS: 4,
+  crateCollectS: 10,
+  crateScan: 0,
   rangeKite: 14,
   rangeBand: 5,
   strafeSpeed: 1,
@@ -7210,6 +7237,8 @@ function wantDrop(bb, enemyClear) {
     const eta = dist / bb.walk * 1.3;
     if (d.lands_in > eta + P.dropLeadS)
       continue;
+    if (P.dropMaxLateS > 0 && eta - d.lands_in > P.dropMaxLateS)
+      continue;
     if (bb.zone.marginAt(d.pos[0], d.pos[1], bb.t + Math.max(eta, d.lands_in) + d.capture_s + 2) < 4)
       continue;
     if (d.holder !== null && d.holder !== bb.me.id && d.capture_s - d.progress < eta)
@@ -7591,6 +7620,16 @@ class SquadScratch {
   postDoneX = 1e9;
   postDoneY = 1e9;
   postDoneT = -1e9;
+  crPhase = 0;
+  crId = -1;
+  crT0 = 0;
+  crX = 0;
+  crY = 0;
+  crZ = 0;
+  crHp = 0;
+  crBrokeT = 0;
+  jsSweep = 0;
+  jsYaw = NaN;
 }
 function huntLead(bb, sc, soundS) {
   let lead = null;
@@ -7625,6 +7664,21 @@ function huntLead(bb, sc, soundS) {
   sc.hz = bb.world ? bb.world.groundZ(sc.sndX, sc.sndY) : bb.z;
   sc.hAge = 99;
   return true;
+}
+function dropDriftGoal(bb, it) {
+  let bd = bb.P.dropDriftDist;
+  for (let i = 0;i < bb.drops.length; i++) {
+    const d = bb.drops[i];
+    if (d.holder !== null && d.holder !== bb.me.id)
+      continue;
+    const dist = Math.hypot(d.pos[0] - bb.x, d.pos[1] - bb.y);
+    if (dist >= bd || bb.zone.marginAt(d.pos[0], d.pos[1], bb.t + d.lands_in + 6) < 6 || bb.isBadGoal(d.pos[0], d.pos[1]))
+      continue;
+    bd = dist;
+    it.driftX = d.pos[0];
+    it.driftY = d.pos[1];
+    it.driftW = bb.P.dropDrift;
+  }
 }
 var POST_RINGS = [0, 0.2, 0.4, 0.6, 0.8, 1];
 var POST_DIRS = 16;
@@ -7750,6 +7804,156 @@ function lootIsClear(bb, item, clear) {
     if (Math.hypot(e.x - item.x, e.y - item.y) < clear)
       return false;
   }
+  return true;
+}
+function crateCalm(bb, target) {
+  const P = bb.P;
+  if (bb.nThreats > 0 || bb.npcAggressor !== null || bb.t - bb.tHurt < 2)
+    return false;
+  if (bb.nearest !== null && bb.nearestD < P.crateReflexSafe)
+    return false;
+  if (bb.hpFrac < healUntil(bb) && bb.t > 20)
+    return false;
+  if (target) {
+    if (bb.t - target.tHitByUs < 3 || bb.t - target.tShotAtUs < 4)
+      return false;
+    if (bb.haveLaser && bb.los[target.id] === 1 && target.dist <= P.laserMaxDist)
+      return false;
+  }
+  return true;
+}
+function pickCrate(bb, sc) {
+  const P = bb.P;
+  const w = bb.world;
+  const items = bb.loot.items;
+  const mz = bb.z + bb.muzzleH;
+  let best = null;
+  let bs = 1e9;
+  for (let i = 0;i < items.length; i++) {
+    const c = items[i];
+    if (c.type !== L_CRATE || c.tSeen !== bb.t || c.badUntil > bb.t)
+      continue;
+    const dx = c.x - bb.x, dy = c.y - bb.y;
+    const d = Math.hypot(dx, dy);
+    if (d > P.crateReflexDist || d < 3)
+      continue;
+    if (w && c.z - w.groundZ(c.x, c.y) > 3)
+      continue;
+    if (bb.zone.marginAt(c.x, c.y, bb.t + 12) < 8)
+      continue;
+    if (w && !w.segClear(bb.x, bb.y, mz, c.x, c.y, c.z + 1.2))
+      continue;
+    const a = Math.atan2(dy, dx) - bb.yaw;
+    const s = d + 12 * Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) - (c.id === sc.crId ? 20 : 0);
+    if (s < bs) {
+      bs = s;
+      best = c;
+    }
+  }
+  return best;
+}
+function crateStart(bb, sc, c) {
+  if (sc.crPhase !== 1 || sc.crId !== c.id)
+    sc.crT0 = bb.t;
+  sc.crPhase = 1;
+  sc.crId = c.id;
+  sc.crX = c.x;
+  sc.crY = c.y;
+  sc.crZ = c.z;
+  sc.crHp = c.hp;
+}
+function crateReflex(bb, sc, it, target) {
+  const P = bb.P;
+  if (!(P.crateReflexDist > 0))
+    return false;
+  if (!crateCalm(bb, target)) {
+    sc.crPhase = 0;
+    return false;
+  }
+  if (sc.crPhase === 1) {
+    const c = bb.loot.get(sc.crId);
+    if (!c) {
+      sc.crPhase = 2;
+      sc.crBrokeT = bb.t;
+    } else if (bb.t - sc.crT0 > P.crateReflexMaxS || bb.t - c.tSeen > 1) {
+      c.badUntil = bb.t + 30;
+      sc.crPhase = 0;
+    } else {
+      sc.crHp = c.hp;
+      if (c.tSeen === bb.t) {
+        it.hold(bb.x, bb.y, bb.z, "crateR");
+        it.shootCrate = c.id;
+        it.targetId = -1;
+        return true;
+      }
+      it.hold(bb.x, bb.y, bb.z, "crateR");
+      it.face = FACE_YAW;
+      it.faceYaw = Math.atan2(c.y - bb.y, c.x - bb.x);
+      return true;
+    }
+  }
+  if (sc.crPhase === 2) {
+    if (bb.t - sc.crBrokeT > P.crateCollectS)
+      sc.crPhase = 0;
+    else {
+      const items = bb.loot.items;
+      const noLaserKnown = !bb.haveLaser && bb.nearestLaserDist() > 1e8;
+      let best = null;
+      let bs = 1e9;
+      for (let i = 0;i < items.length; i++) {
+        const p = items[i];
+        if (p.badUntil > bb.t)
+          continue;
+        const dc = Math.hypot(p.x - sc.crX, p.y - sc.crY);
+        if (dc > 8)
+          continue;
+        let s = Math.hypot(p.x - bb.x, p.y - bb.y);
+        if (p.type === L_PICKUP) {
+          if (pickupValue(bb, p.wk) <= 0)
+            continue;
+          if (p.wk === W_LASER)
+            s -= 100;
+          else if (p.wk === W_LIGHTNING && noLaserKnown)
+            s -= 50;
+          else
+            continue;
+        } else if (p.type !== L_CUBE)
+          continue;
+        if (s < bs) {
+          bs = s;
+          best = p;
+        }
+      }
+      if (best) {
+        sc.lc.item = best;
+        sc.lc.npc = null;
+        const d = Math.hypot(best.x - bb.x, best.y - bb.y);
+        lootIntent(bb, sc.lc, it, d > 20 && bb.energy > 40 ? PACE_BOOST : PACE_WALK);
+        it.face = FACE_SCAN;
+        if (target)
+          it.targetId = target.id;
+        it.label = "crateC";
+        return true;
+      }
+      if (bb.t - sc.crBrokeT > 0.6)
+        sc.crPhase = 0;
+      else {
+        it.hold(bb.x, bb.y, bb.z, "crateW");
+        it.face = FACE_YAW;
+        it.faceYaw = Math.atan2(sc.crY - bb.y, sc.crX - bb.x);
+        return true;
+      }
+    }
+  }
+  if (bb.t >= P.crateReflexUntil || !bb.gun || bb.gunSlot < 0)
+    return false;
+  const c = pickCrate(bb, sc);
+  if (!c)
+    return false;
+  crateStart(bb, sc, c);
+  it.hold(bb.x, bb.y, bb.z, "crateR");
+  it.shootCrate = c.id;
+  it.targetId = -1;
   return true;
 }
 var EX_CELL = 50;
@@ -8030,6 +8234,27 @@ function decideSquadCore(bb, mv, sc) {
       it.face = FACE_SCAN;
       if (target)
         it.targetId = target.id;
+      if (P.crateScan > 0 && P.crateReflexDist > 0) {
+        if (sc.jsYaw === sc.jsYaw) {
+          const dy = bb.yaw - sc.jsYaw;
+          sc.jsSweep += Math.abs(Math.atan2(Math.sin(dy), Math.cos(dy)));
+        }
+        sc.jsYaw = bb.yaw;
+        if (sc.crPhase === 1 && bb.loot.get(sc.crId) === null) {
+          sc.crPhase = 2;
+          sc.crBrokeT = bb.t;
+        }
+        if (sc.jsSweep >= 2 * Math.PI && sc.crPhase !== 2 && crateCalm(bb, target) && bb.gun && bb.gunSlot >= 0) {
+          const cur = sc.crPhase === 1 ? bb.loot.get(sc.crId) : null;
+          const c = cur && cur.tSeen === bb.t ? cur : pickCrate(bb, sc);
+          if (c) {
+            crateStart(bb, sc, c);
+            it.shootCrate = c.id;
+            it.targetId = -1;
+            it.label = sc.js === 1 ? "jscrate" : "jfcrate";
+          }
+        }
+      }
       weaponReflex(bb, it);
       return it;
     }
@@ -8045,13 +8270,15 @@ function decideSquadCore(bb, mv, sc) {
     weaponReflex(bb, it);
     return it;
   }
-  const di = wantDrop(bb, 0);
+  const safeDrop = P.dropSafeHp > 0;
+  const lowHp = safeDrop && bb.hpFrac < P.dropSafeHp;
+  const di = lowHp && target ? -1 : wantDrop(bb, lowHp ? P.dropEnemyClear : 0);
   if (di >= 0) {
     const d = bb.drops[di];
     const dist = Math.hypot(d.pos[0] - bb.x, d.pos[1] - bb.y);
     const soonEnough = !target || d.lands_in <= dist / bb.walk * 1.3 + P.dropFightLeadS;
     const refuel = P.dropRefuelHp > 0 && bb.hpFrac < P.dropRefuelHp && dist <= P.dropRefuelDist && d.lands_in <= dist / bb.walk * 1.3 + 3;
-    if (refuel || soonEnough && (!target || bb.nThreats === 0 || dist < 35 || bb.hpFrac < 0.75 && dist < 150)) {
+    if (refuel || soonEnough && (!target || bb.nThreats === 0 || dist < 35 || !safeDrop && bb.hpFrac < 0.75 && dist < 150)) {
       it.capture(d.pos[0], d.pos[1], d.pos[2], target || dist < 40 ? PACE_WALK : PACE_BOOST, refuel ? "refuel" : "drop");
       it.face = FACE_THREATS;
       if (target)
@@ -8059,6 +8286,10 @@ function decideSquadCore(bb, mv, sc) {
       weaponReflex(bb, it);
       return it;
     }
+  }
+  if (P.crateReflexDist > 0 && crateReflex(bb, sc, it, target)) {
+    weaponReflex(bb, it);
+    return it;
   }
   const engD0 = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist;
   const engD = sc.passive ? Math.min(engD0, P.openEngageDist) : engD0;
@@ -8104,6 +8335,8 @@ function decideSquadCore(bb, mv, sc) {
       return it;
     }
     duelIntent(bb, mv, sc, it, target, true);
+    if (P.dropDrift > 0 && it.kind === K_FIGHT)
+      dropDriftGoal(bb, it);
     if (P.gunFarDist > 0 && !bb.haveLaser && target.dist > P.gunFarDist && (target.hp < 0 || target.hp > P.gunFarHp * target.maxHp))
       it.weaponsFree = false;
     if (P.ambushDist > 0 && it.label === "duel" && target.dist > P.ambushDist && bb.t - target.tShotAtUs > 4 && bb.t - target.tAimedAtUs > 1.5 && bb.t - target.tHitByUs > 4 && bb.t - bb.tHurt > 3) {
@@ -8129,7 +8362,7 @@ function decideSquadCore(bb, mv, sc) {
     weaponReflex(bb, it);
     return it;
   }
-  const post = P.snipePost > 0 && bb.haveLaser;
+  const post = P.snipePost === 1 && bb.haveLaser;
   if ((P.tempoHunt > 0 || post) && zl < 1 && !sc.passive && bb.hpFrac >= P.seekHp) {
     if (bestLoot(bb, true, P.tempoHuntLoot, sc.lc) && sc.lc.item) {
       lootIntent(bb, sc.lc, it, PACE_WALK);
@@ -9857,5 +10090,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-P-s65.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 65, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, snipePost: 1 } });
+// src/entries/final-N-s70.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 70, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, valDrop: 0 } });

@@ -11,8 +11,8 @@
  */
 import { Track, W_LASER, W_LIGHTNING } from "../perception/tracker.ts"
 import { S_BOOST, S_CRATE, S_GUN, S_JET, S_LASER, S_LASER_CHARGE, S_LIGHTNING, S_MORTAR, S_NPC_GUN, S_RELOAD, S_STEP } from "../perception/sounds.ts"
-import { L_PICKUP, MODE_FFA, type Blackboard, type LootItem } from "../brain/blackboard.ts"
-import { FACE_SCAN, FACE_THREATS, PACE_BOOST, PACE_WALK, STYLE_HOLD, STYLE_PUSH, STYLE_SPOT, type Intent } from "../brain/intent.ts"
+import { L_CRATE, L_CUBE, L_PICKUP, MODE_FFA, type Blackboard, type LootItem } from "../brain/blackboard.ts"
+import { FACE_SCAN, FACE_THREATS, FACE_YAW, K_FIGHT, PACE_BOOST, PACE_WALK, STYLE_HOLD, STYLE_PUSH, STYLE_SPOT, type Intent } from "../brain/intent.ts"
 import { newSpot, type Mover } from "../brain/navx.ts"
 import { cellOf, F_STAND, getExposure } from "../cover/exposure.ts"
 import { decideFfa } from "./ffa.ts"
@@ -65,6 +65,18 @@ export class SquadScratch {
   postDoneX = 1e9
   postDoneY = 1e9
   postDoneT = -1e9
+  /** crate reflex: phase (0 none, 1 shooting crId, 2 collecting around crX/crY), start / break time, last seen hp */
+  crPhase = 0
+  crId = -1
+  crT0 = 0
+  crX = 0
+  crY = 0
+  crZ = 0
+  crHp = 0
+  crBrokeT = 0
+  /** jet scan: torso yaw swept so far (rad) and the last yaw */
+  jsSweep = 0
+  jsYaw = NaN
 }
 
 /**
@@ -100,6 +112,21 @@ function huntLead(bb: Blackboard, sc: SquadScratch, soundS: number): boolean {
   sc.hz = bb.world ? bb.world.groundZ(sc.sndX, sc.sndY) : bb.z
   sc.hAge = 99
   return true
+}
+
+/** drop drift: the nearest called, not yet taken supply drop within dropDriftDist that will be inside the zone */
+function dropDriftGoal(bb: Blackboard, it: Intent): void {
+  let bd = bb.P.dropDriftDist
+  for (let i = 0; i < bb.drops.length; i++) {
+    const d = bb.drops[i]
+    if (d.holder !== null && d.holder !== bb.me.id) continue
+    const dist = Math.hypot(d.pos[0] - bb.x, d.pos[1] - bb.y)
+    if (dist >= bd || bb.zone.marginAt(d.pos[0], d.pos[1], bb.t + d.lands_in + 6) < 6 || bb.isBadGoal(d.pos[0], d.pos[1])) continue
+    bd = dist
+    it.driftX = d.pos[0]
+    it.driftY = d.pos[1]
+    it.driftW = bb.P.dropDrift
+  }
 }
 
 const POST_RINGS = [0, 0.2, 0.4, 0.6, 0.8, 1]
@@ -226,6 +253,152 @@ function lootIsClear(bb: Blackboard, item: LootItem, clear: number): boolean {
     const e = bb.en[i]
     if (Math.hypot(e.x - item.x, e.y - item.y) < clear) return false
   }
+  return true
+}
+
+/**
+ * crate reflex safety: no visible mech within crateReflexSafe, nothing (mech or NPC) shooting at us, no mech fight
+ * going on (target hit by us / shooting at us recently), not hurt, and no laser shot available at the target
+ */
+function crateCalm(bb: Blackboard, target: Track | null): boolean {
+  const P = bb.P
+  if (bb.nThreats > 0 || bb.npcAggressor !== null || bb.t - bb.tHurt < 2) return false
+  if (bb.nearest !== null && bb.nearestD < P.crateReflexSafe) return false
+  if (bb.hpFrac < healUntil(bb) && bb.t > 20) return false
+  if (target) {
+    if (bb.t - target.tHitByUs < 3 || bb.t - target.tShotAtUs < 4) return false
+    if (bb.haveLaser && bb.los[target.id] === 1 && target.dist <= P.laserMaxDist) return false
+  }
+  return true
+}
+
+/** best visible crate within crateReflexDist with a clean shot line (near, little turning, current one kept) */
+function pickCrate(bb: Blackboard, sc: SquadScratch): LootItem | null {
+  const P = bb.P
+  const w = bb.world
+  const items = bb.loot.items
+  const mz = bb.z + bb.muzzleH
+  let best: LootItem | null = null
+  let bs = 1e9
+  for (let i = 0; i < items.length; i++) {
+    const c = items[i]
+    if (c.type !== L_CRATE || c.tSeen !== bb.t || c.badUntil > bb.t) continue
+    const dx = c.x - bb.x, dy = c.y - bb.y
+    const d = Math.hypot(dx, dy)
+    if (d > P.crateReflexDist || d < 3) continue
+    // its cube must be reachable on foot (no roof crates) and stay inside the zone
+    if (w && c.z - w.groundZ(c.x, c.y) > 3) continue
+    if (bb.zone.marginAt(c.x, c.y, bb.t + 12) < 8) continue
+    if (w && !w.segClear(bb.x, bb.y, mz, c.x, c.y, c.z + 1.2)) continue
+    const a = Math.atan2(dy, dx) - bb.yaw
+    const s = d + 12 * Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) - (c.id === sc.crId ? 20 : 0)
+    if (s < bs) {
+      bs = s
+      best = c
+    }
+  }
+  return best
+}
+
+/** start shooting crate c (phase 1) */
+function crateStart(bb: Blackboard, sc: SquadScratch, c: LootItem): void {
+  if (sc.crPhase !== 1 || sc.crId !== c.id) sc.crT0 = bb.t
+  sc.crPhase = 1
+  sc.crId = c.id
+  sc.crX = c.x
+  sc.crY = c.y
+  sc.crZ = c.z
+  sc.crHp = c.hp
+}
+
+/**
+ * Crate reflex (P.crateReflexDist > 0): stand still and shoot a nearby crate until it breaks, then collect its cube
+ * and a dropped laser (lightning only while no laser is known; never a mortar). Aborts the moment anything engages
+ * us or a mech comes within crateReflexSafe. Returns true when it filled the intent.
+ */
+function crateReflex(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track | null): boolean {
+  const P = bb.P
+  if (!(P.crateReflexDist > 0)) return false
+  if (!crateCalm(bb, target)) {
+    sc.crPhase = 0
+    return false
+  }
+  if (sc.crPhase === 1) {
+    const c = bb.loot.get(sc.crId)
+    if (!c) {
+      // gone from memory (broken, or seen gone): collect whatever lies there
+      sc.crPhase = 2
+      sc.crBrokeT = bb.t
+    } else if (bb.t - sc.crT0 > P.crateReflexMaxS || bb.t - c.tSeen > 1) {
+      c.badUntil = bb.t + 30
+      sc.crPhase = 0
+    } else {
+      sc.crHp = c.hp
+      if (c.tSeen === bb.t) {
+        it.hold(bb.x, bb.y, bb.z, "crateR")
+        it.shootCrate = c.id
+        it.targetId = -1
+        return true
+      }
+      // out of view for a moment (miss count running): hold and keep aiming at it
+      it.hold(bb.x, bb.y, bb.z, "crateR")
+      it.face = FACE_YAW
+      it.faceYaw = Math.atan2(c.y - bb.y, c.x - bb.x)
+      return true
+    }
+  }
+  if (sc.crPhase === 2) {
+    if (bb.t - sc.crBrokeT > P.crateCollectS) sc.crPhase = 0
+    else {
+      // a wanted weapon dropped by the crate first (laser; lightning only while no laser is known), else its cube
+      const items = bb.loot.items
+      const noLaserKnown = !bb.haveLaser && bb.nearestLaserDist() > 1e8
+      let best: LootItem | null = null
+      let bs = 1e9
+      for (let i = 0; i < items.length; i++) {
+        const p = items[i]
+        if (p.badUntil > bb.t) continue
+        const dc = Math.hypot(p.x - sc.crX, p.y - sc.crY)
+        if (dc > 8) continue
+        let s = Math.hypot(p.x - bb.x, p.y - bb.y)
+        if (p.type === L_PICKUP) {
+          if (pickupValue(bb, p.wk) <= 0) continue
+          if (p.wk === W_LASER) s -= 100
+          else if (p.wk === W_LIGHTNING && noLaserKnown) s -= 50
+          else continue
+        } else if (p.type !== L_CUBE) continue
+        if (s < bs) {
+          bs = s
+          best = p
+        }
+      }
+      if (best) {
+        sc.lc.item = best
+        sc.lc.npc = null
+        const d = Math.hypot(best.x - bb.x, best.y - bb.y)
+        lootIntent(bb, sc.lc, it, d > 20 && bb.energy > 40 ? PACE_BOOST : PACE_WALK)
+        it.face = FACE_SCAN
+        if (target) it.targetId = target.id
+        it.label = "crateC"
+        return true
+      }
+      // nothing (left) near the crate: done once the drops had time to show up
+      if (bb.t - sc.crBrokeT > 0.6) sc.crPhase = 0
+      else {
+        it.hold(bb.x, bb.y, bb.z, "crateW")
+        it.face = FACE_YAW
+        it.faceYaw = Math.atan2(sc.crY - bb.y, sc.crX - bb.x)
+        return true
+      }
+    }
+  }
+  if (bb.t >= P.crateReflexUntil || !bb.gun || bb.gunSlot < 0) return false
+  const c = pickCrate(bb, sc)
+  if (!c) return false
+  crateStart(bb, sc, c)
+  it.hold(bb.x, bb.y, bb.z, "crateR")
+  it.shootCrate = c.id
+  it.targetId = -1
   return true
 }
 
@@ -508,6 +681,28 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
       it.jetUp = sc.js === 1
       it.face = FACE_SCAN
       if (target) it.targetId = target.id
+      // crate reflex variant: once a full turn is done, lock onto a crate in line (shot from the air)
+      if (P.crateScan > 0 && P.crateReflexDist > 0) {
+        if (sc.jsYaw === sc.jsYaw) {
+          const dy = bb.yaw - sc.jsYaw
+          sc.jsSweep += Math.abs(Math.atan2(Math.sin(dy), Math.cos(dy)))
+        }
+        sc.jsYaw = bb.yaw
+        if (sc.crPhase === 1 && bb.loot.get(sc.crId) === null) {
+          sc.crPhase = 2 // broke while we were airborne: collect after landing
+          sc.crBrokeT = bb.t
+        }
+        if (sc.jsSweep >= 2 * Math.PI && sc.crPhase !== 2 && crateCalm(bb, target) && bb.gun && bb.gunSlot >= 0) {
+          const cur = sc.crPhase === 1 ? bb.loot.get(sc.crId) : null
+          const c = cur && cur.tSeen === bb.t ? cur : pickCrate(bb, sc)
+          if (c) {
+            crateStart(bb, sc, c)
+            it.shootCrate = c.id
+            it.targetId = -1
+            it.label = sc.js === 1 ? "jscrate" : "jfcrate"
+          }
+        }
+      }
       weaponReflex(bb, it)
       return it
     }
@@ -529,7 +724,10 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   }
 
   // 2. supply drop
-  const di = wantDrop(bb, 0)
+  // safe-drop variant: hurt -> only an uncontested drop with nobody in sight
+  const safeDrop = P.dropSafeHp > 0
+  const lowHp = safeDrop && bb.hpFrac < P.dropSafeHp
+  const di = lowHp && target ? -1 : wantDrop(bb, lowHp ? P.dropEnemyClear : 0)
   if (di >= 0) {
     const d = bb.drops[di]
     const dist = Math.hypot(d.pos[0] - bb.x, d.pos[1] - bb.y)
@@ -539,13 +737,19 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     const soonEnough = !target || d.lands_in <= (dist / bb.walk) * 1.3 + P.dropFightLeadS
     // refuel variant: hurt -> go for it from far and through a fight (full HP + 3 cubes + energy), arriving as it lands
     const refuel = P.dropRefuelHp > 0 && bb.hpFrac < P.dropRefuelHp && dist <= P.dropRefuelDist && d.lands_in <= (dist / bb.walk) * 1.3 + 3
-    if (refuel || (soonEnough && (!target || bb.nThreats === 0 || dist < 35 || (bb.hpFrac < 0.75 && dist < 150)))) {
+    if (refuel || (soonEnough && (!target || bb.nThreats === 0 || dist < 35 || (!safeDrop && bb.hpFrac < 0.75 && dist < 150)))) {
       it.capture(d.pos[0], d.pos[1], d.pos[2], target || dist < 40 ? PACE_WALK : PACE_BOOST, refuel ? "refuel" : "drop")
       it.face = FACE_THREATS
       if (target) it.targetId = target.id
       weaponReflex(bb, it)
       return it
     }
+  }
+
+  // 2'. crate reflex variant (no mech near, nothing on us): stand and shoot a crate, then collect its cube / laser
+  if (P.crateReflexDist > 0 && crateReflex(bb, sc, it, target)) {
+    weaponReflex(bb, it)
+    return it
   }
 
   // 3. fight: whoever engages us, or is close; a far mech that ignores us is only shot at in passing
@@ -599,6 +803,7 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
       return it
     }
     duelIntent(bb, mv, sc, it, target, true)
+    if (P.dropDrift > 0 && it.kind === K_FIGHT) dropDriftGoal(bb, it)
     // no laser: do not empty the magazine at long range on a healthy mech (22 % hits beyond 120 m)
     if (P.gunFarDist > 0 && !bb.haveLaser && target.dist > P.gunFarDist && (target.hp < 0 || target.hp > P.gunFarHp * target.maxHp)) it.weaponsFree = false
     // a mech that has not noticed us: close in silently, open fire only from ambushDist (full magazine, it
@@ -631,7 +836,7 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
 
   // 5''. tempo variants (nobody engaged, HP >= seekHp, no zone duty): no NPC / crate farming and no far loot;
   // "hunt" goes for the next known / heard mech with boost, "sniper post" (laser) stands where it sees far
-  const post = P.snipePost > 0 && bb.haveLaser
+  const post = P.snipePost === 1 && bb.haveLaser
   if ((P.tempoHunt > 0 || post) && zl < 1 && !sc.passive && bb.hpFrac >= P.seekHp) {
     // cubes and wanted weapons close by first (silent; kills drop cubes + 2)
     if (bestLoot(bb, true, P.tempoHuntLoot, sc.lc) && sc.lc.item) {
