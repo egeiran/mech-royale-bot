@@ -83,6 +83,12 @@ export class SquadScratch {
   /** jet scan: torso yaw swept so far (rad) and the last yaw */
   jsSweep = 0
   jsYaw = NaN
+  /** laser rush hysteresis pacing (rushBoostHi): boosting now, last rush decision time */
+  rbOn = true
+  rbT = -1e9
+  /** jet peek (jetPeekS): 0 idle, 1 climbing, 2 falling; start time of the current / last peek */
+  jp = 0
+  jpT0 = -1e9
   /** train kiting: last time the trigger held, run direction, waypoint, last plan time, boost burst on */
   trT = -1e9
   trDx = 0
@@ -382,7 +388,7 @@ function rushLaser(bb: Blackboard, maxDist: number, sc: SquadScratch, roof: bool
     const p = items[i]
     if (p.type !== L_PICKUP || p.wk !== W_LASER || p.badUntil > bb.t) continue
     const climb = p.z - bb.z
-    if (climb > (roof ? 40 : 3)) continue
+    if (climb > (roof ? 40 : bb.P.rushRoofFight > 3 ? bb.P.rushRoofFight : 3)) continue
     const d = Math.hypot(p.x - bb.x, p.y - bb.y)
     if (d >= bd || bb.zone.marginAt(p.x, p.y, bb.t + d / 15 + 2) < 6) continue
     let crowd = 0
@@ -399,9 +405,21 @@ function rushLaser(bb: Blackboard, maxDist: number, sc: SquadScratch, roof: bool
 
 /** go and take sc.wpn (boost while energy allows), shooting `target` on the way */
 function rushIntent(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track | null): void {
+  const P = bb.P
   sc.lc.item = sc.wpn
   sc.lc.npc = null
-  lootIntent(bb, sc.lc, it, bb.energy > bb.P.laserRushEnergy ? PACE_BOOST : PACE_WALK)
+  let boost = bb.energy > P.laserRushEnergy
+  // hysteresis pacing variant: once below laserRushEnergy, walk until rushBoostHi (energy regenerates only after
+  // 0.6 s without spending, so toggling at one threshold walks almost all the time after the first burst)
+  if (P.rushBoostHi > 0) {
+    if (bb.t - sc.rbT > 1) sc.rbOn = boost
+    else if (sc.rbOn && !boost) sc.rbOn = false
+    else if (!sc.rbOn && bb.energy >= P.rushBoostHi) sc.rbOn = true
+    sc.rbT = bb.t
+    boost = sc.rbOn
+  }
+  lootIntent(bb, sc.lc, it, boost ? PACE_BOOST : PACE_WALK)
+  if (P.rushForceJet > 0 && sc.wpn && sc.wpn.z - bb.z > 3) it.forceJet = true
   if (target) {
     it.targetId = target.id
     it.face = FACE_THREATS
@@ -425,7 +443,7 @@ function lootIsClear(bb: Blackboard, item: LootItem, clear: number): boolean {
 function crateCalm(bb: Blackboard, target: Track | null): boolean {
   const P = bb.P
   if (bb.nThreats > 0 || bb.npcAggressor !== null || bb.t - bb.tHurt < 2) return false
-  if (bb.nearest !== null && bb.nearestD < P.crateReflexSafe) return false
+  if (bb.nearest !== null && bb.nearestD < (P.crateNoLasSafe > 0 && !bb.haveLaser ? P.crateNoLasSafe : P.crateReflexSafe)) return false
   if (bb.hpFrac < healUntil(bb) && bb.t > 20) return false
   if (target) {
     if (bb.t - target.tHitByUs < 3 || bb.t - target.tShotAtUs < 4) return false
@@ -447,7 +465,7 @@ function pickCrate(bb: Blackboard, sc: SquadScratch): LootItem | null {
     if (c.type !== L_CRATE || c.tSeen !== bb.t || c.badUntil > bb.t) continue
     const dx = c.x - bb.x, dy = c.y - bb.y
     const d = Math.hypot(dx, dy)
-    if (d > P.crateReflexDist || d < 3) continue
+    if (d > (P.crateNoLasDist > 0 && !bb.haveLaser ? P.crateNoLasDist : P.crateReflexDist) || d < 3) continue
     // its cube must be reachable on foot (no roof crates) and stay inside the zone
     if (w && c.z - w.groundZ(c.x, c.y) > 3) continue
     if (bb.zone.marginAt(c.x, c.y, bb.t + 12) < 8) continue
@@ -562,6 +580,28 @@ function crateReflex(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track
   it.shootCrate = c.id
   it.targetId = -1
   return true
+}
+
+/** horizontal distance to the nearest visible non-NPC mech (Infinity = none) */
+function nearestMechD(bb: Blackboard): number {
+  let nd = Infinity
+  for (let i = 0; i < bb.nEn; i++) {
+    const e = bb.en[i]
+    if (!e.npc && e.dist < nd) nd = e.dist
+  }
+  return nd
+}
+
+/** jet peek trigger: no laser held or known within laserRush, calm, grounded, energy, open sky, not too soon */
+function jetPeekReady(bb: Blackboard, sc: SquadScratch, zl: number): boolean {
+  const P = bb.P
+  if (bb.haveLaser || bb.t < P.jetPeekFrom || bb.t >= P.jetPeekUntil || bb.t - sc.jpT0 < P.jetPeekS) return false
+  if (!bb.grounded || bb.energy < P.jetPeekE || zl > 0 || sc.crPhase !== 0) return false
+  if (bb.nThreats > 0 || bb.npcAggressor !== null || bb.t - bb.tHurt < 3 || nearestMechD(bb) < P.jetPeekSafe) return false
+  if (bb.nearestLaserDist() < (P.laserRush > 0 ? P.laserRush : 220)) return false
+  const w = bb.world
+  const h = bb.me.stats.height ?? 9
+  return !w || w.segClear(bb.x, bb.y, bb.z + h + 0.2, bb.x, bb.y, bb.z + h + P.jetScan + 2)
 }
 
 const hpFracOf = (e: Track): number => (e.hp >= 0 && e.maxHp > 0 ? e.hp / e.maxHp : 1)
@@ -1162,6 +1202,8 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
       const h = bb.me.stats.height ?? 9
       const open = !w || w.segClear(bb.x, bb.y, bb.z + h + 0.2, bb.x, bb.y, bb.z + h + P.jetScan + 2)
       sc.js = bb.t < 3 && bb.grounded && open && !close && zl < 2 && bb.energy >= P.jetScanMinE + 20 && bb.t - bb.tHurt > 2 ? 1 : 3
+      // rush-at-once variant: a ground laser is already in sight from the spawn -> no scan, go now
+      if (sc.js === 1 && P.rushNoScan > 0 && P.laserRush > 0 && !bb.haveLaser && rushLaser(bb, P.rushNoScan, sc, false, null)) sc.js = 3
     }
     if (sc.js === 1 && (bb.z - g >= P.jetScan || bb.energy < P.jetScanMinE || bb.t - bb.tHurt < 0.5 || close || bb.t > 8 || (bb.t > 1 && bb.grounded))) sc.js = 2
     if (sc.js === 2 && (bb.grounded || close || bb.t > 12)) sc.js = 3
@@ -1192,6 +1234,28 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
           }
         }
       }
+      weaponReflex(bb, it)
+      return it
+    }
+  }
+
+  // 0''. jet peek variant: no laser held or known, calm -> repeat the jet scan from here (lasers behind buildings
+  // and on roofs are only listed while in sight)
+  if (P.jetPeekS > 0 && sc.js >= 3 && (sc.jp > 0 || jetPeekReady(bb, sc, zl))) {
+    const w = bb.world
+    const g = w ? w.groundZ(bb.x, bb.y) : bb.z
+    const close = nearestMechD(bb) < P.jetPeekSafe || bb.nThreats > 0 || bb.npcAggressor !== null
+    if (sc.jp === 0) {
+      sc.jp = 1
+      sc.jpT0 = bb.t
+    }
+    if (sc.jp === 1 && (bb.z - g >= P.jetScan || bb.energy < P.jetScanMinE || bb.t - bb.tHurt < 0.5 || close || bb.t - sc.jpT0 > 5 || (bb.t - sc.jpT0 > 1 && bb.grounded))) sc.jp = 2
+    if (sc.jp === 2 && (bb.grounded || close || bb.t - sc.jpT0 > 10)) sc.jp = 0
+    if (sc.jp > 0) {
+      it.hold(bb.x, bb.y, bb.z, sc.jp === 1 ? "jetpeek" : "jpfall")
+      it.jetUp = sc.jp === 1
+      it.face = FACE_SCAN
+      if (target) it.targetId = target.id
       weaponReflex(bb, it)
       return it
     }
@@ -1342,7 +1406,7 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   const recentEnemy = bb.t - bb.tEnemySeen < 6
 
   // 5'. no laser yet and one is known: straight there (roofs too), before any other loot
-  if (P.laserRush > 0 && !bb.haveLaser && zl < (P.zoneGuard > 0 ? 2 : 1) && rushLaser(bb, P.laserRush, sc, true, target)) {
+  if (P.laserRush > 0 && !bb.haveLaser && zl < (P.zoneGuard > 0 || P.rushZone1 > 0 ? 2 : 1) && rushLaser(bb, P.laserRush, sc, true, target)) {
     rushIntent(bb, sc, it, target)
     if (!target) it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
     weaponReflex(bb, it)

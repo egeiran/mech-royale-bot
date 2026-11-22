@@ -170,7 +170,11 @@ orders +-0.1. Scripts (scratch, not kept): r1/rr.sh, mb.sh, scan.sh, sana.py.
 circle's centre, re-picked when that centre moves, and hold there scanning; from `centerHoldFrom` s. FARM explores only
 0.4 % of decisions (loot reaches 260 m), so alone it is inert: batch 3001..3048 vs FARM 6.85 / 6.83 (45 ties).
 `centerHoldLoot` m (0 = off) bounds loot step 5 meanwhile: 40 -> 7.02 / 6.83 (n.s.), distance from the next centre at
-30 / 60 s 279 / 264 -> 256 / 210 m (spawns ~285 m out; the circle is ~380 m for the first ~100 s).
+30 / 60 s 279 / 264 -> 256 / 210 m (spawns ~285 m out; the circle is ~380 m for the first ~100 s). REAL: + loot 40
+5.09 vs FARM 5.5. `edgeHold: 1` (precedence; `edgeHoldMargin` 45, same From / Loot params): the spot is edgeHoldMargin
+inside the next circle on the side away from the recency-weighted centroid of known mechs (none: our side), re-picked
+on a new next circle or (after 8 s) a > 1 rad side change; holds sweeping toward the centre. + loot 40: batch 6.56 /
+6.83 (n.s.), cubes 5.7 / 7.1; edge walks p50 41 m (FARM already idles near the edge).
 
 ## Params (see comments in params.ts)
 Ranges `range*`, `engageDist`, `kiteBoost*`; fire control `fireMinP`, `gunMaxDist`, `fireMarginSigma`, `targetJink`,

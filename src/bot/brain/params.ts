@@ -159,6 +159,31 @@ export const DEFAULTS = {
   laserRushCrowd: 2,
   /** no lightning pickups while we hold no laser and a laser is known within this distance (0 = off) */
   ltgVetoLaser: 0,
+  // ---- laser-2 variants (2026-11-22; data/tmp/laser2; all off by default)
+  /** skip the opening jet scan when a ground-level laser is already known (visible from the spawn) within this
+   *  many m: rush at once (saves the ~4 s scan; real fields take floor lasers fast). 0 = off */
+  rushNoScan: 0,
+  /** laser rush pacing with hysteresis: boost down to laserRushEnergy, then walk until the energy is back to this
+   *  (without it the rush toggles at laserRushEnergy and mostly walks after the first burst). 0 = off */
+  rushBoostHi: 0,
+  /** laser rush mid-fight: roof lasers up to this climb (m) also count (default: ground only while engaged). 0 = off */
+  rushRoofFight: 0,
+  /** laser rush travel may use jets even under fire / just hurt (roof lasers while hunters shoot). 0 = off */
+  rushForceJet: 0,
+  /** laser rush (step 5') also at zone level 1 (should start moving): the rush already checks the laser stays inside
+   *  the circle on arrival; otherwise only loot within 60 m is taken then. 0 = off */
+  rushZone1: 0,
+  /** jet peek: with no laser held and none known within laserRush, calm (no mech within jetPeekSafe, not hurt for
+   *  3 s, no zone duty), grounded with >= jetPeekE energy and open sky: repeat the jet scan (jetScan m, spinning)
+   *  at most every jetPeekS s, from jetPeekFrom s on, while t < jetPeekUntil. 0 = off */
+  jetPeekS: 0,
+  jetPeekE: 70,
+  jetPeekSafe: 120,
+  jetPeekFrom: 10,
+  jetPeekUntil: 150,
+  /** crate reflex while no laser is held: these replace crateReflexDist / crateReflexSafe (0 = keep) */
+  crateNoLasDist: 0,
+  crateNoLasSafe: 0,
   /** finish kills: a mech target below this HP fraction that runs away (or broke the line) is chased with boost
    *  to finishChaseRange, unless finishChaseCrowd other mechs are within 60 m of it (0 = off) */
   finishChaseHp: 0,

@@ -6733,6 +6733,18 @@ var DEFAULTS = {
   laserRushFinishDist: 110,
   laserRushCrowd: 2,
   ltgVetoLaser: 0,
+  rushNoScan: 0,
+  rushBoostHi: 0,
+  rushRoofFight: 0,
+  rushForceJet: 0,
+  rushZone1: 0,
+  jetPeekS: 0,
+  jetPeekE: 70,
+  jetPeekSafe: 120,
+  jetPeekFrom: 10,
+  jetPeekUntil: 150,
+  crateNoLasDist: 0,
+  crateNoLasSafe: 0,
   finishChaseHp: 0,
   finishChaseRange: 25,
   finishChaseCrowd: 2,
@@ -8331,6 +8343,10 @@ class SquadScratch {
   crBrokeT = 0;
   jsSweep = 0;
   jsYaw = NaN;
+  rbOn = true;
+  rbT = -1e9;
+  jp = 0;
+  jpT0 = -1e9;
   trT = -1e9;
   trDx = 0;
   trDy = 0;
@@ -8615,7 +8631,7 @@ function rushLaser(bb, maxDist, sc, roof, target) {
     if (p.type !== L_PICKUP || p.wk !== W_LASER || p.badUntil > bb.t)
       continue;
     const climb = p.z - bb.z;
-    if (climb > (roof ? 40 : 3))
+    if (climb > (roof ? 40 : bb.P.rushRoofFight > 3 ? bb.P.rushRoofFight : 3))
       continue;
     const d = Math.hypot(p.x - bb.x, p.y - bb.y);
     if (d >= bd || bb.zone.marginAt(p.x, p.y, bb.t + d / 15 + 2) < 6)
@@ -8634,9 +8650,23 @@ function rushLaser(bb, maxDist, sc, roof, target) {
   return sc.wpn !== null;
 }
 function rushIntent(bb, sc, it, target) {
+  const P = bb.P;
   sc.lc.item = sc.wpn;
   sc.lc.npc = null;
-  lootIntent(bb, sc.lc, it, bb.energy > bb.P.laserRushEnergy ? PACE_BOOST : PACE_WALK);
+  let boost = bb.energy > P.laserRushEnergy;
+  if (P.rushBoostHi > 0) {
+    if (bb.t - sc.rbT > 1)
+      sc.rbOn = boost;
+    else if (sc.rbOn && !boost)
+      sc.rbOn = false;
+    else if (!sc.rbOn && bb.energy >= P.rushBoostHi)
+      sc.rbOn = true;
+    sc.rbT = bb.t;
+    boost = sc.rbOn;
+  }
+  lootIntent(bb, sc.lc, it, boost ? PACE_BOOST : PACE_WALK);
+  if (P.rushForceJet > 0 && sc.wpn && sc.wpn.z - bb.z > 3)
+    it.forceJet = true;
   if (target) {
     it.targetId = target.id;
     it.face = FACE_THREATS;
@@ -8655,7 +8685,7 @@ function crateCalm(bb, target) {
   const P = bb.P;
   if (bb.nThreats > 0 || bb.npcAggressor !== null || bb.t - bb.tHurt < 2)
     return false;
-  if (bb.nearest !== null && bb.nearestD < P.crateReflexSafe)
+  if (bb.nearest !== null && bb.nearestD < (P.crateNoLasSafe > 0 && !bb.haveLaser ? P.crateNoLasSafe : P.crateReflexSafe))
     return false;
   if (bb.hpFrac < healUntil(bb) && bb.t > 20)
     return false;
@@ -8680,7 +8710,7 @@ function pickCrate(bb, sc) {
       continue;
     const dx = c.x - bb.x, dy = c.y - bb.y;
     const d = Math.hypot(dx, dy);
-    if (d > P.crateReflexDist || d < 3)
+    if (d > (P.crateNoLasDist > 0 && !bb.haveLaser ? P.crateNoLasDist : P.crateReflexDist) || d < 3)
       continue;
     if (w && c.z - w.groundZ(c.x, c.y) > 3)
       continue;
@@ -8800,6 +8830,29 @@ function crateReflex(bb, sc, it, target) {
   it.shootCrate = c.id;
   it.targetId = -1;
   return true;
+}
+function nearestMechD(bb) {
+  let nd = Infinity;
+  for (let i = 0;i < bb.nEn; i++) {
+    const e = bb.en[i];
+    if (!e.npc && e.dist < nd)
+      nd = e.dist;
+  }
+  return nd;
+}
+function jetPeekReady(bb, sc, zl) {
+  const P = bb.P;
+  if (bb.haveLaser || bb.t < P.jetPeekFrom || bb.t >= P.jetPeekUntil || bb.t - sc.jpT0 < P.jetPeekS)
+    return false;
+  if (!bb.grounded || bb.energy < P.jetPeekE || zl > 0 || sc.crPhase !== 0)
+    return false;
+  if (bb.nThreats > 0 || bb.npcAggressor !== null || bb.t - bb.tHurt < 3 || nearestMechD(bb) < P.jetPeekSafe)
+    return false;
+  if (bb.nearestLaserDist() < (P.laserRush > 0 ? P.laserRush : 220))
+    return false;
+  const w = bb.world;
+  const h = bb.me.stats.height ?? 9;
+  return !w || w.segClear(bb.x, bb.y, bb.z + h + 0.2, bb.x, bb.y, bb.z + h + P.jetScan + 2);
 }
 var hpFracOf = (e) => e.hp >= 0 && e.maxHp > 0 ? e.hp / e.maxHp : 1;
 function focusTtk(bb, e) {
@@ -9396,6 +9449,8 @@ function decideSquadCore(bb, mv, sc) {
       const h = bb.me.stats.height ?? 9;
       const open = !w || w.segClear(bb.x, bb.y, bb.z + h + 0.2, bb.x, bb.y, bb.z + h + P.jetScan + 2);
       sc.js = bb.t < 3 && bb.grounded && open && !close && zl < 2 && bb.energy >= P.jetScanMinE + 20 && bb.t - bb.tHurt > 2 ? 1 : 3;
+      if (sc.js === 1 && P.rushNoScan > 0 && P.laserRush > 0 && !bb.haveLaser && rushLaser(bb, P.rushNoScan, sc, false, null))
+        sc.js = 3;
     }
     if (sc.js === 1 && (bb.z - g >= P.jetScan || bb.energy < P.jetScanMinE || bb.t - bb.tHurt < 0.5 || close || bb.t > 8 || bb.t > 1 && bb.grounded))
       sc.js = 2;
@@ -9428,6 +9483,28 @@ function decideSquadCore(bb, mv, sc) {
           }
         }
       }
+      weaponReflex(bb, it);
+      return it;
+    }
+  }
+  if (P.jetPeekS > 0 && sc.js >= 3 && (sc.jp > 0 || jetPeekReady(bb, sc, zl))) {
+    const w = bb.world;
+    const g = w ? w.groundZ(bb.x, bb.y) : bb.z;
+    const close = nearestMechD(bb) < P.jetPeekSafe || bb.nThreats > 0 || bb.npcAggressor !== null;
+    if (sc.jp === 0) {
+      sc.jp = 1;
+      sc.jpT0 = bb.t;
+    }
+    if (sc.jp === 1 && (bb.z - g >= P.jetScan || bb.energy < P.jetScanMinE || bb.t - bb.tHurt < 0.5 || close || bb.t - sc.jpT0 > 5 || bb.t - sc.jpT0 > 1 && bb.grounded))
+      sc.jp = 2;
+    if (sc.jp === 2 && (bb.grounded || close || bb.t - sc.jpT0 > 10))
+      sc.jp = 0;
+    if (sc.jp > 0) {
+      it.hold(bb.x, bb.y, bb.z, sc.jp === 1 ? "jetpeek" : "jpfall");
+      it.jetUp = sc.jp === 1;
+      it.face = FACE_SCAN;
+      if (target)
+        it.targetId = target.id;
       weaponReflex(bb, it);
       return it;
     }
@@ -9548,7 +9625,7 @@ function decideSquadCore(bb, mv, sc) {
   if (!hurt)
     m.regen = false;
   const recentEnemy = bb.t - bb.tEnemySeen < 6;
-  if (P.laserRush > 0 && !bb.haveLaser && zl < (P.zoneGuard > 0 ? 2 : 1) && rushLaser(bb, P.laserRush, sc, true, target)) {
+  if (P.laserRush > 0 && !bb.haveLaser && zl < (P.zoneGuard > 0 || P.rushZone1 > 0 ? 2 : 1) && rushLaser(bb, P.laserRush, sc, true, target)) {
     rushIntent(bb, sc, it, target);
     if (!target)
       it.face = recentEnemy ? FACE_THREATS : FACE_SCAN;
@@ -11339,5 +11416,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/v4-farm-lasergrab.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16, targetLaserBonus: 6, duelLaserDist: 60, lootClearWpn: 30, jetScan: 28, laserRush: 300 } });
+// src/entries/v4-farm-fastrush.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1 } });
