@@ -56,6 +56,10 @@ export const DEFAULTS = {
    *  taken even when a crate was shot 0-3 s earlier, 17 of 433 onsets in 20 showdowns): crates stay lootable and the
    *  crate reflex stays on while hurt, and the blackboard's regen timer ignores crate hits */
   crateHeal: 0,
+  /** SQUAD: a visible mech closing on us faster than this (m/s, averaged velocity) within engageApproachMax m counts as
+   *  engaged (go and meet the hunter instead of farming until it is within engageDist); 0 = off */
+  engageApproachV: 0,
+  engageApproachMax: 200,
 
   // ---------------------------------------------------------------- engagement range
   /** preferred duel distance with gun only */

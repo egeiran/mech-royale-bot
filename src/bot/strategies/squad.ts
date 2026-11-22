@@ -1122,6 +1122,12 @@ export function underFire(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Inten
   return true
 }
 
+/** radial speed (m/s) at which a visible mech closes on us (averaged velocity; < 0 = moving away; 0 if not visible) */
+function closingOnUs(bb: Blackboard, e: Track): number {
+  if (!e.visible || e.npc || e.dist < 1) return 0
+  return -(e.vxAvg * (e.x - bb.x) + e.vyAvg * (e.y - bb.y)) / e.dist
+}
+
 export function decideSquad(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   const P = bb.P
   // UNKNOWN-phase restraint (openPassiveS, off by default): until the mode is settled (FFA latch / squad lock) or
@@ -1346,7 +1352,7 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   // hurt: leave mechs that have not noticed us alone unless they are close (time to regenerate first)
   const engD0 = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist
   const engD = sc.passive ? Math.min(engD0, P.openEngageDist) : engD0
-  const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2)
+  const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2 || (P.engageApproachV > 0 && !sc.passive && closingOnUs(bb, target) > P.engageApproachV && target.dist < P.engageApproachMax))
   // spare pacing variant: a nearly dead lone mech is left alive while we are weak (we farm / take cover instead)
   if (target && engaged && !(P.spareHp > 0 && spareNow(bb, target))) {
     sc.fought = true

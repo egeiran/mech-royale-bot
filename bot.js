@@ -6681,6 +6681,8 @@ var DEFAULTS = {
   passHoldHurt: 0,
   healLootHp: 0.6,
   crateHeal: 0,
+  engageApproachV: 0,
+  engageApproachMax: 200,
   rangeGun: 14,
   rangeLightning: 14,
   rangeLaser: 0,
@@ -9377,6 +9379,11 @@ function underFire(bb, mv, sc, it) {
   it.face = FACE_THREATS;
   return true;
 }
+function closingOnUs(bb, e) {
+  if (!e.visible || e.npc || e.dist < 1)
+    return 0;
+  return -(e.vxAvg * (e.x - bb.x) + e.vyAvg * (e.y - bb.y)) / e.dist;
+}
 function decideSquad(bb, mv, sc) {
   const P = bb.P;
   sc.passive = P.openPassiveS > 0 && bb.t < P.openPassiveS && !bb.squadLocked && bb.mode !== MODE_FFA;
@@ -9588,7 +9595,7 @@ function decideSquadCore(bb, mv, sc) {
   }
   const engD0 = bb.hpFrac < healUntil(bb) ? Math.min(P.engageDist, P.engageHurtDist) : P.engageDist;
   const engD = sc.passive ? Math.min(engD0, P.openEngageDist) : engD0;
-  const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2);
+  const engaged = target !== null && (bb.nThreats > 0 || target.dist < engD || bb.t - target.tShotAtUs < 4 || bb.t - target.tHitByUs < 2 || P.engageApproachV > 0 && !sc.passive && closingOnUs(bb, target) > P.engageApproachV && target.dist < P.engageApproachMax);
   if (target && engaged && !(P.spareHp > 0 && spareNow(bb, target))) {
     sc.fought = true;
     const tHp = target.hp >= 0 && target.maxHp > 0 ? target.hp / target.maxHp : 1;
@@ -11461,5 +11468,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/v4-gunmag-ltg45.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 12, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1, rushZone1: 1, rangeGunOnly: 55, upGunMag: 105, valLightning: 45, ltgNoLasVal: 60, ltgNoLasT: 20, rangeLightning: 18 } });
+// src/entries/v4-gunmag-meet.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1, rushZone1: 1, rangeGunOnly: 55, upGunMag: 105, modeGapMs: 12, engageApproachV: 1.5 } });
