@@ -6707,6 +6707,8 @@ var DEFAULTS = {
   centerHoldR: 60,
   centerHoldFrom: 0,
   centerHoldLoot: 0,
+  edgeHold: 0,
+  edgeHoldMargin: 45,
   seekSoundS: 0,
   reloadFarDist: 999,
   shieldOrbit: 0.3,
@@ -8350,6 +8352,11 @@ class SquadScratch {
   chT = -1e9;
   chArr = false;
   chQ = { radius: 2.5, height: 9, allowJet: false, energy: 0 };
+  ehA = 0;
+  ehNx = 0;
+  ehNy = 0;
+  ehNr = 0;
+  ehT = -1e9;
 }
 function huntLead(bb, sc, soundS) {
   let lead = null;
@@ -8464,6 +8471,64 @@ function centerSpot(bb, mv, sc) {
   if (bb.t - sc.chT < 1)
     return false;
   sc.chT = bb.t;
+  return openSpot(bb, mv, sc, zn.ncx, zn.ncy, R, -1);
+}
+function edgeSpot(bb, mv, sc) {
+  const w = bb.world;
+  if (!w)
+    return false;
+  const zn = bb.zone;
+  let sx = 0, sy = 0, sw = 0;
+  const trs = bb.tracker.mechs;
+  for (let i = 0;i < trs.length; i++) {
+    const e = trs[i];
+    if (!e.known || e.dead || e.id === bb.me.id)
+      continue;
+    const age = e.age(bb.t);
+    if (age > 45)
+      continue;
+    const wt = Math.exp(-age / 15);
+    sx += wt * e.x;
+    sy += wt * e.y;
+    sw += wt;
+  }
+  let dx = sw > 0 ? zn.ncx - sx / sw : 0, dy = sw > 0 ? zn.ncy - sy / sw : 0;
+  if (Math.hypot(dx, dy) < 15) {
+    dx = bb.x - zn.ncx;
+    dy = bb.y - zn.ncy;
+  }
+  const a = Math.atan2(dy, dx);
+  if (sc.chOk && Math.abs(zn.ncx - sc.ehNx) + Math.abs(zn.ncy - sc.ehNy) + Math.abs(zn.nr - sc.ehNr) < 2 && !bb.isBadGoal(sc.chX, sc.chY)) {
+    const da = a - sc.ehA;
+    if (bb.t - sc.ehT < 8 || Math.abs(Math.atan2(Math.sin(da), Math.cos(da))) < 1)
+      return true;
+  }
+  sc.chOk = false;
+  if (bb.t - sc.chT < 1)
+    return false;
+  sc.chT = bb.t;
+  const b = w.bounds;
+  let r = Math.max(0, zn.nr - bb.P.edgeHoldMargin);
+  let { ncx: px, ncy: py } = zn;
+  for (;r > 0; r -= 10) {
+    px = zn.ncx + r * Math.cos(a);
+    py = zn.ncy + r * Math.sin(a);
+    if (px > b.minX + 20 && px < b.maxX - 20 && py > b.minY + 20 && py < b.maxY - 20)
+      break;
+  }
+  if (!openSpot(bb, mv, sc, px, py, 40, bb.P.edgeHoldMargin - 10))
+    return false;
+  sc.ehA = a;
+  sc.ehNx = zn.ncx;
+  sc.ehNy = zn.ncy;
+  sc.ehNr = zn.nr;
+  sc.ehT = bb.t;
+  return true;
+}
+function openSpot(bb, mv, sc, px, py, R, minNext) {
+  const w = bb.world;
+  const zn = bb.zone;
+  const bd = w.bounds;
   const f = getExposure(w);
   const nav = mv.nav;
   const q = sc.chQ;
@@ -8477,11 +8542,13 @@ function centerSpot(bb, mv, sc) {
     const nd = r === 0 ? 1 : POST_DIRS;
     for (let k = 0;k < nd; k++) {
       const a = k * 2 * Math.PI / nd;
-      const x = zn.ncx + r * Math.cos(a), y = zn.ncy + r * Math.sin(a);
+      const x = px + r * Math.cos(a), y = py + r * Math.sin(a);
+      if (minNext >= 0 && (x < bd.minX + 8 || x > bd.maxX - 8 || y < bd.minY + 8 || y > bd.maxY - 8 || zn.marginNext(x, y) < minNext))
+        continue;
       const c = cellOf(f, x, y);
       if (!(f.flags[c] & F_STAND) || f.edge[c] < 6)
         continue;
-      if (zn.marginAt(x, y, bb.t + 45) < 6 || bb.isBadGoal(x, y))
+      if (minNext < 0 && zn.marginAt(x, y, bb.t + 45) < 6 || bb.isBadGoal(x, y))
         continue;
       const s = Math.min(15, f.edge[c]) + 10 * f.expo[c] / 255 - 0.1 * r - 0.02 * Math.hypot(x - bb.x, y - bb.y);
       if (s > bsAny) {
@@ -9544,7 +9611,7 @@ function decideSquadCore(bb, mv, sc) {
     weaponReflex(bb, it);
     return it;
   }
-  const lootD = P.centerHold > 0 && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist;
+  const lootD = (P.centerHold > 0 || P.edgeHold > 0) && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist;
   if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, lootD, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK);
     const ci = sc.lc.item;
@@ -9616,18 +9683,23 @@ function decideSquadCore(bb, mv, sc) {
       return it;
     }
   }
-  if (P.centerHold > 0 && bb.t >= P.centerHoldFrom && centerSpot(bb, mv, sc)) {
+  const edge = P.edgeHold > 0;
+  if ((edge || P.centerHold > 0) && bb.t >= P.centerHoldFrom && (edge ? edgeSpot(bb, mv, sc) : centerSpot(bb, mv, sc))) {
     const d = Math.hypot(sc.chX - bb.x, sc.chY - bb.y);
+    it.face = FACE_SCAN;
     if (d > (sc.chArr ? 10 : 4)) {
       sc.chArr = false;
-      it.goto(sc.chX, sc.chY, sc.chZ, PACE_WALK, "center");
+      it.goto(sc.chX, sc.chY, sc.chZ, PACE_WALK, edge ? "edge" : "center");
       it.arrive = 3;
       it.allowJet = false;
     } else {
       sc.chArr = true;
-      it.hold(bb.x, bb.y, bb.z, "chold");
+      it.hold(bb.x, bb.y, bb.z, edge ? "ehold" : "chold");
+      if (edge && bb.t - bb.tHurt >= P.lookDamageS) {
+        it.face = FACE_YAW;
+        it.faceYaw = Math.atan2(bb.zone.ncy - bb.y, bb.zone.ncx - bb.x) + Math.sin(bb.t * P.scanFreq) * P.scanAmp;
+      }
     }
-    it.face = FACE_SCAN;
     weaponReflex(bb, it);
     return it;
   }
@@ -11267,20 +11339,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/probe-laser45.ts
-var gate = (ctx) => {
-  const bot = mainBot(ctx);
-  let idle = false;
-  let decided = false;
-  return {
-    name: bot.name,
-    act(obs) {
-      if (!decided && obs.t >= 45) {
-        decided = true;
-        idle = !obs.self.weapons.some((w) => w && w.kind === "laser");
-      }
-      return idle ? {} : bot.act(obs);
-    }
-  };
-};
-runProcess({ name: BOT_NAME, factory: gate, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16 } });
+// src/entries/v4-farm-laserhunt.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16, laserHunt: 1, laserHuntUntil: 120, targetLaserBonus: 6, duelLaserDist: 60, lootClearWpn: 30, jetScan: 28, laserRush: 300 } });

@@ -103,6 +103,10 @@ export const DEFAULTS = {
   centerHoldFrom: 0,
   /** ... and loot (step 5: cubes, crates, NPCs, weapons) only within this many m of us meanwhile (0 = lootMaxDist) */
   centerHoldLoot: 0,
+  /** SQUAD edge hold (1 = on, precedence over centerHold; centerHoldFrom / centerHoldLoot apply): the same, at an open
+   *  ground spot edgeHoldMargin m inside the next circle on the side away from the known mechs, scanning inward */
+  edgeHold: 0,
+  edgeHoldMargin: 45,
   /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
   seekSoundS: 0,
   /** SQUAD: reload before contact when the target is further than this and the mag is below reloadIdleFrac

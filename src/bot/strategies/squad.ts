@@ -109,6 +109,12 @@ export class SquadScratch {
   chT = -1e9
   chArr = false
   readonly chQ = { radius: 2.5, height: 9, allowJet: false, energy: 0 }
+  /** edge hold variant (spot in sc.ch*): wanted side (rad from the centre), next circle and time at the pick */
+  ehA = 0
+  ehNx = 0
+  ehNy = 0
+  ehNr = 0
+  ehT = -1e9
 }
 
 /**
@@ -226,6 +232,70 @@ function centerSpot(bb: Blackboard, mv: Mover, sc: SquadScratch): boolean {
   sc.chOk = false
   if (bb.t - sc.chT < 1) return false
   sc.chT = bb.t
+  return openSpot(bb, mv, sc, zn.ncx, zn.ncy, R, -1)
+}
+
+/**
+ * edge hold spot: edgeHoldMargin inside the next circle on the side away from the recency-weighted centroid of the
+ * known mechs (none known / centroid at the centre: our side), pulled inward into the map, then the best open ground
+ * spot within 40 m of it (>= edgeHoldMargin - 10 inside the next circle); into sc.ch*. Re-picked when the next circle
+ * changes, or (after 8 s) when the wanted side turns by more than 1 rad.
+ */
+function edgeSpot(bb: Blackboard, mv: Mover, sc: SquadScratch): boolean {
+  const w = bb.world
+  if (!w) return false
+  const zn = bb.zone
+  let sx = 0, sy = 0, sw = 0
+  const trs = bb.tracker.mechs
+  for (let i = 0; i < trs.length; i++) {
+    const e = trs[i]
+    if (!e.known || e.dead || e.id === bb.me.id) continue
+    const age = e.age(bb.t)
+    if (age > 45) continue
+    const wt = Math.exp(-age / 15)
+    sx += wt * e.x
+    sy += wt * e.y
+    sw += wt
+  }
+  let dx = sw > 0 ? zn.ncx - sx / sw : 0, dy = sw > 0 ? zn.ncy - sy / sw : 0
+  if (Math.hypot(dx, dy) < 15) {
+    dx = bb.x - zn.ncx
+    dy = bb.y - zn.ncy
+  }
+  const a = Math.atan2(dy, dx)
+  if (sc.chOk && Math.abs(zn.ncx - sc.ehNx) + Math.abs(zn.ncy - sc.ehNy) + Math.abs(zn.nr - sc.ehNr) < 2 && !bb.isBadGoal(sc.chX, sc.chY)) {
+    const da = a - sc.ehA
+    if (bb.t - sc.ehT < 8 || Math.abs(Math.atan2(Math.sin(da), Math.cos(da))) < 1) return true
+  }
+  sc.chOk = false
+  if (bb.t - sc.chT < 1) return false
+  sc.chT = bb.t
+  const b = w.bounds
+  let r = Math.max(0, zn.nr - bb.P.edgeHoldMargin)
+  let px = zn.ncx, py = zn.ncy
+  for (; r > 0; r -= 10) {
+    px = zn.ncx + r * Math.cos(a)
+    py = zn.ncy + r * Math.sin(a)
+    if (px > b.minX + 20 && px < b.maxX - 20 && py > b.minY + 20 && py < b.maxY - 20) break
+  }
+  if (!openSpot(bb, mv, sc, px, py, 40, bb.P.edgeHoldMargin - 10)) return false
+  sc.ehA = a
+  sc.ehNx = zn.ncx
+  sc.ehNy = zn.ncy
+  sc.ehNr = zn.nr
+  sc.ehT = bb.t
+  return true
+}
+
+/**
+ * best open ground cell of the exposure field (standable ground layer = no building footprint, no roof; >= 6 m from
+ * walls) within R of (px, py), on our on-foot nav component when one matches; into sc.ch*. minNext < 0: inside the
+ * circle 45 s ahead by 6 m; else inside the map and >= minNext m inside the next circle.
+ */
+function openSpot(bb: Blackboard, mv: Mover, sc: SquadScratch, px: number, py: number, R: number, minNext: number): boolean {
+  const w = bb.world!
+  const zn = bb.zone
+  const bd = w.bounds
   const f = getExposure(w)
   const nav = mv.nav
   const q = sc.chQ
@@ -239,10 +309,11 @@ function centerSpot(bb: Blackboard, mv: Mover, sc: SquadScratch): boolean {
     const nd = r === 0 ? 1 : POST_DIRS
     for (let k = 0; k < nd; k++) {
       const a = (k * 2 * Math.PI) / nd
-      const x = zn.ncx + r * Math.cos(a), y = zn.ncy + r * Math.sin(a)
+      const x = px + r * Math.cos(a), y = py + r * Math.sin(a)
+      if (minNext >= 0 && (x < bd.minX + 8 || x > bd.maxX - 8 || y < bd.minY + 8 || y > bd.maxY - 8 || zn.marginNext(x, y) < minNext)) continue
       const c = cellOf(f, x, y)
       if (!(f.flags[c]! & F_STAND) || f.edge[c]! < 6) continue
-      if (zn.marginAt(x, y, bb.t + 45) < 6 || bb.isBadGoal(x, y)) continue
+      if ((minNext < 0 && zn.marginAt(x, y, bb.t + 45) < 6) || bb.isBadGoal(x, y)) continue
       const s = Math.min(15, f.edge[c]!) + (10 * f.expo[c]!) / 255 - 0.1 * r - 0.02 * Math.hypot(x - bb.x, y - bb.y)
       if (s > bsAny) {
         bsAny = s
@@ -1334,8 +1405,8 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     weaponReflex(bb, it)
     return it
   }
-  // centre hold variant with centerHoldLoot: only loot that close to us (the rest of the time is spent at the centre)
-  const lootD = P.centerHold > 0 && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist
+  // centre / edge hold variants with centerHoldLoot: only loot that close to us (the rest of the time is spent holding)
+  const lootD = (P.centerHold > 0 || P.edgeHold > 0) && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist
   if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < 0.6, lootD, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK)
     // crate stand-off variant: standing at a crate for 5 s without denting it (no line, out of the pitch range)
@@ -1413,18 +1484,25 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
 
   // 6'''. centre hold variant: instead of exploring, walk to an open ground spot near the next circle's centre and
   // hold there scanning (hunters released one after another have the shortest walk to the middle)
-  if (P.centerHold > 0 && bb.t >= P.centerHoldFrom && centerSpot(bb, mv, sc)) {
+  // edge hold variant (edgeHold, takes precedence): the same, at a spot just inside the next circle's edge on the side
+  // away from the known mechs, scanning toward the centre
+  const edge = P.edgeHold > 0
+  if ((edge || P.centerHold > 0) && bb.t >= P.centerHoldFrom && (edge ? edgeSpot(bb, mv, sc) : centerSpot(bb, mv, sc))) {
     const d = Math.hypot(sc.chX - bb.x, sc.chY - bb.y)
+    it.face = FACE_SCAN
     if (d > (sc.chArr ? 10 : 4)) {
       sc.chArr = false
-      it.goto(sc.chX, sc.chY, sc.chZ, PACE_WALK, "center")
+      it.goto(sc.chX, sc.chY, sc.chZ, PACE_WALK, edge ? "edge" : "center")
       it.arrive = 3
       it.allowJet = false
     } else {
       sc.chArr = true
-      it.hold(bb.x, bb.y, bb.z, "chold")
+      it.hold(bb.x, bb.y, bb.z, edge ? "ehold" : "chold")
+      if (edge && bb.t - bb.tHurt >= P.lookDamageS) {
+        it.face = FACE_YAW
+        it.faceYaw = Math.atan2(bb.zone.ncy - bb.y, bb.zone.ncx - bb.x) + Math.sin(bb.t * P.scanFreq) * P.scanAmp
+      }
     }
-    it.face = FACE_SCAN
     weaponReflex(bb, it)
     return it
   }
