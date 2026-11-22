@@ -6762,6 +6762,16 @@ var DEFAULTS = {
   kiteTrainLaser: 1,
   kiteTrainDist: 0,
   kiteTrainFrom: 0,
+  focusFire: 0,
+  focusHoldS: 3,
+  focusSwitchK: 0.5,
+  focusWound: 0.9,
+  focusAlt: 1,
+  focusFinishHp: 0,
+  focusFinishS: 0,
+  focusFinishSelf: 0.3,
+  focusFinishCrowd: 99,
+  focusStandRatio: 0,
   fortOnUs: 0,
   fortNearR: 60,
   fortT: 999,
@@ -8305,6 +8315,9 @@ class SquadScratch {
   trPlanT = -1e9;
   trOk = false;
   trBoost = false;
+  fcId = -1;
+  fcLineT = -1e9;
+  fcT = -1e9;
   fort = new FortState;
 }
 function huntLead(bb, sc, soundS) {
@@ -8632,6 +8645,88 @@ function crateReflex(bb, sc, it, target) {
   it.targetId = -1;
   return true;
 }
+var hpFracOf = (e) => e.hp >= 0 && e.maxHp > 0 ? e.hp / e.maxHp : 1;
+function focusTtk(bb, e) {
+  const hp = e.hp >= 0 ? e.hp : bb.cfg.mech.hp ?? 1400;
+  const d = ourDps(bb, e, e.dist);
+  return d > 1 ? hp / d : 1000;
+}
+function focusFinish(bb, e) {
+  const P = bb.P;
+  if (e.npc || bb.los[e.id] !== 1 || bb.hpFrac < P.focusFinishSelf)
+    return false;
+  if (!(P.focusFinishHp > 0 && hpFracOf(e) < P.focusFinishHp || P.focusFinishS > 0 && focusTtk(bb, e) <= P.focusFinishS))
+    return false;
+  if (P.focusFinishCrowd < 99) {
+    let n = 0;
+    for (let i = 0;i < bb.nEn; i++) {
+      const o = bb.en[i];
+      if (o !== e && !o.npc && (bb.t - o.tShotAtUs < 3 || o.aimingAtUs && bb.los[o.id] === 1))
+        n++;
+    }
+    if (n > P.focusFinishCrowd)
+      return false;
+  }
+  return true;
+}
+function focusTarget(bb, sc, fb) {
+  const P = bb.P;
+  let prim = null;
+  if (sc.fcId >= 0) {
+    const tr = bb.tracker.get(sc.fcId);
+    if (!tr || tr.dead || !tr.known || bb.t - sc.fcLineT > P.focusHoldS)
+      sc.fcId = -1;
+    else if (tr.visible)
+      prim = tr;
+  }
+  const primLine = prim !== null && bb.los[prim.id] === 1;
+  if (primLine)
+    sc.fcLineT = bb.t;
+  let wounded = false;
+  for (let i = 0;i < bb.nEn; i++) {
+    const e = bb.en[i];
+    if (e.npc || bb.los[e.id] !== 1)
+      continue;
+    if (hpFracOf(e) < P.focusWound)
+      wounded = true;
+  }
+  let best = null;
+  let bs = 1e9;
+  for (let i = 0;i < bb.nEn; i++) {
+    const e = bb.en[i];
+    if (e.npc || bb.los[e.id] !== 1 || e === prim)
+      continue;
+    if (wounded && hpFracOf(e) >= 0.98)
+      continue;
+    const s = focusTtk(bb, e);
+    if (s < bs) {
+      bs = s;
+      best = e;
+    }
+  }
+  let out;
+  if (primLine) {
+    out = prim;
+    if (best && bs < P.focusSwitchK * focusTtk(bb, prim) && !(hpFracOf(prim) < P.focusWound && hpFracOf(best) >= 0.98)) {
+      sc.fcId = best.id;
+      sc.fcT = bb.t;
+      out = best;
+    }
+  } else if (sc.fcId >= 0) {
+    out = P.focusAlt > 0 && best ? best : prim ?? fb;
+  } else if (best) {
+    sc.fcId = best.id;
+    sc.fcT = bb.t;
+    sc.fcLineT = bb.t;
+    out = best;
+  } else
+    out = fb;
+  if (out) {
+    bb.mem.targetId = out.id;
+    bb.mem.targetT = bb.t;
+  }
+  return out;
+}
 function trainPursuers(bb) {
   const R = bb.P.kiteTrainR;
   let n = 0;
@@ -8748,11 +8843,12 @@ function trainKite(bb, mv, sc, it, target) {
   let tg = null;
   let ts = 1e9;
   let near = 1e9;
+  const focus = P.focusFire > 0 && target !== null && !target.npc && bb.los[target.id] === 1;
   for (let i = 0;i < bb.nEn; i++) {
     const e = bb.en[i];
     if (e.dist < near)
       near = e.dist;
-    if (bb.los[e.id] !== 1)
+    if (focus || bb.los[e.id] !== 1)
       continue;
     const hpF = e.hp >= 0 && e.maxHp > 0 ? e.hp / e.maxHp : 1;
     const s = e.dist - (hpF < 0.3 ? 80 : 0) - (e.id === bb.mem.targetId ? 10 : 0);
@@ -8761,11 +8857,22 @@ function trainKite(bb, mv, sc, it, target) {
       tg = e;
     }
   }
+  if (focus)
+    tg = target;
   if (!tg)
     tg = target;
   if (tg) {
     bb.mem.targetId = tg.id;
     bb.mem.targetT = bb.t;
+  }
+  if (tg && !tg.npc && bb.los[tg.id] === 1 && bb.hpFrac >= P.focusFinishSelf) {
+    const fin = focusFinish(bb, tg);
+    if (fin || P.focusStandRatio > 0 && fightRatio(bb, tg) >= P.focusStandRatio) {
+      sc.trBoost = false;
+      it.fight(tg.id, STYLE_HOLD, tg.dist, fin ? "fcFin" : "fcStand");
+      it.face = FACE_THREATS;
+      return true;
+    }
   }
   if (!sc.trOk || bb.t - sc.trPlanT > 0.5 || Math.hypot(sc.trGX - bb.x, sc.trGY - bb.y) < 8) {
     sc.trPlanT = bb.t;
@@ -8959,6 +9066,10 @@ function duelIntent(bb, mv, sc, it, target, allowDisengage) {
     }
   }
   const range = duelRange(bb, target);
+  if ((P.focusFinishHp > 0 || P.focusFinishS > 0) && focusFinish(bb, target)) {
+    it.fight(target.id, STYLE_HOLD, range, "fcFin");
+    return;
+  }
   if (P.snipePost > 0 && bb.mode !== MODE_FFA && bb.haveLaser && !target.npc && bb.los[target.id] === 1 && target.dist > range + P.rangeBand && target.dist <= P.snipeMaxDist) {
     it.fight(target.id, STYLE_HOLD, range, "snipe");
     return;
@@ -9078,7 +9189,16 @@ function decideSquadCore(bb, mv, sc) {
     }
   }
   const it = bb.intent.reset();
-  const target = pickTarget(bb);
+  let target = pickTarget(bb);
+  if (P.focusFire > 0) {
+    const fc = focusTarget(bb, sc, target);
+    if (!(target && target.npc))
+      target = fc;
+    else {
+      bb.mem.targetId = target.id;
+      bb.mem.targetT = bb.t;
+    }
+  }
   const zl = zoneDuty(bb, sc.zg);
   if (P.jetScan > 0 && sc.js < 3) {
     const w = bb.world;
@@ -11010,5 +11130,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-FARM-s212.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 212, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16 } });
+// src/entries/final-FARM-s213.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 213, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 80, valNpc: 30, valCrate: 22, valCube: 16 } });

@@ -18,7 +18,7 @@ import { cellOf, F_STAND, getExposure } from "../cover/exposure.ts"
 import { decideFfa } from "./ffa.ts"
 import { FortState, fortEnabled, fortress } from "../brain/fortress.ts"
 import {
-  bestLoot, duelRange, fightRatio, healUntil, lootIntent, newLootChoice, newZoneGoal, pickTarget, pickupValue, wantDrop, weaponReflex, zoneDuty, zoneIntent,
+  bestLoot, duelRange, fightRatio, healUntil, lootIntent, newLootChoice, newZoneGoal, ourDps, pickTarget, pickupValue, wantDrop, weaponReflex, zoneDuty, zoneIntent,
   zoneOutside,
 } from "./common.ts"
 
@@ -93,6 +93,10 @@ export class SquadScratch {
   trPlanT = -1e9
   trOk = false
   trBoost = false
+  /** focus fire: primary mech id (-1 none), last time it had a shot line, time it became primary */
+  fcId = -1
+  fcLineT = -1e9
+  fcT = -1e9
   /** roof fortress variant (brain/fortress.ts) */
   readonly fort = new FortState()
 }
@@ -420,6 +424,94 @@ function crateReflex(bb: Blackboard, sc: SquadScratch, it: Intent, target: Track
   return true
 }
 
+const hpFracOf = (e: Track): number => (e.hp >= 0 && e.maxHp > 0 ? e.hp / e.maxHp : 1)
+
+/** focus fire: expected seconds to kill e from here (current HP incl. cube scaling / our DPS at its distance) */
+function focusTtk(bb: Blackboard, e: Track): number {
+  const hp = e.hp >= 0 ? e.hp : (bb.cfg.mech.hp ?? 1400)
+  const d = ourDps(bb, e, e.dist)
+  return d > 1 ? hp / d : 1e3
+}
+
+/** focus fire, kill confirmation: e is nearly dead (HP fraction below focusFinishHp, or our expected time to kill it
+ *  at most focusFinishS s), we have a shot line, our own HP fraction is at least focusFinishSelf and at most
+ *  focusFinishCrowd other mechs are on us (shot at us within 3 s or aiming at us with a line) */
+function focusFinish(bb: Blackboard, e: Track): boolean {
+  const P = bb.P
+  if (e.npc || bb.los[e.id] !== 1 || bb.hpFrac < P.focusFinishSelf) return false
+  if (!((P.focusFinishHp > 0 && hpFracOf(e) < P.focusFinishHp) || (P.focusFinishS > 0 && focusTtk(bb, e) <= P.focusFinishS))) return false
+  if (P.focusFinishCrowd < 99) {
+    let n = 0
+    for (let i = 0; i < bb.nEn; i++) {
+      const o = bb.en[i]
+      if (o !== e && !o.npc && (bb.t - o.tShotAtUs < 3 || (o.aimingAtUs && bb.los[o.id] === 1))) n++
+    }
+    if (n > P.focusFinishCrowd) return false
+  }
+  return true
+}
+
+/**
+ * Focus fire (P.focusFire): the sticky primary mech target. Kept while alive and with a shot line within
+ * focusHoldS; a challenger with a line replaces it only when its time to kill is < focusSwitchK x the primary's
+ * (never a full-HP one while the primary is wounded); with no primary the cheapest-to-kill mech with a line
+ * (full-HP ones only when no mech with a line is below focusWound HP). While the primary has no line the best other
+ * mech with a line is returned (focusAlt) without becoming the primary. `fb` (pickTarget) is returned when no mech
+ * with a line qualifies, and NPC choices pass through unless the primary has a line.
+ */
+function focusTarget(bb: Blackboard, sc: SquadScratch, fb: Track | null): Track | null {
+  const P = bb.P
+  let prim: Track | null = null
+  if (sc.fcId >= 0) {
+    const tr = bb.tracker.get(sc.fcId)
+    if (!tr || tr.dead || !tr.known || bb.t - sc.fcLineT > P.focusHoldS) sc.fcId = -1
+    else if (tr.visible) prim = tr
+  }
+  const primLine = prim !== null && bb.los[prim.id] === 1
+  if (primLine) sc.fcLineT = bb.t
+  // candidates: visible mechs with a shot line within our weapons' reach
+  let wounded = false
+  for (let i = 0; i < bb.nEn; i++) {
+    const e = bb.en[i]
+    if (e.npc || bb.los[e.id] !== 1) continue
+    if (hpFracOf(e) < P.focusWound) wounded = true
+  }
+  let best: Track | null = null
+  let bs = 1e9
+  for (let i = 0; i < bb.nEn; i++) {
+    const e = bb.en[i]
+    if (e.npc || bb.los[e.id] !== 1 || e === prim) continue
+    if (wounded && hpFracOf(e) >= 0.98) continue
+    const s = focusTtk(bb, e)
+    if (s < bs) {
+      bs = s
+      best = e
+    }
+  }
+  let out: Track | null
+  if (primLine) {
+    out = prim
+    if (best && bs < P.focusSwitchK * focusTtk(bb, prim!) && !(hpFracOf(prim!) < P.focusWound && hpFracOf(best) >= 0.98)) {
+      sc.fcId = best.id
+      sc.fcT = bb.t
+      out = best
+    }
+  } else if (sc.fcId >= 0) {
+    // primary out of line (or out of sight) for less than focusHoldS: shoot someone else meanwhile, keep it primary
+    out = P.focusAlt > 0 && best ? best : (prim ?? fb)
+  } else if (best) {
+    sc.fcId = best.id
+    sc.fcT = bb.t
+    sc.fcLineT = bb.t
+    out = best
+  } else out = fb
+  if (out) {
+    bb.mem.targetId = out.id
+    bb.mem.targetT = bb.t
+  }
+  return out
+}
+
 /** train kiting: visible mechs within kiteTrainR, or with a line on us within 220 m that aim / shot at us */
 function trainPursuers(bb: Blackboard): number {
   const R = bb.P.kiteTrainR
@@ -535,14 +627,15 @@ function trainKite(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Intent, targ
     sc.trOk = false
     return false
   }
-  // target: nearest pursuer with a clean line, nearly dead ones first
+  // target: nearest pursuer with a clean line, nearly dead ones first (focus fire variant: the sticky primary)
   let tg: Track | null = null
   let ts = 1e9
   let near = 1e9
+  const focus = P.focusFire > 0 && target !== null && !target.npc && bb.los[target.id] === 1
   for (let i = 0; i < bb.nEn; i++) {
     const e = bb.en[i]
     if (e.dist < near) near = e.dist
-    if (bb.los[e.id] !== 1) continue
+    if (focus || bb.los[e.id] !== 1) continue
     const hpF = e.hp >= 0 && e.maxHp > 0 ? e.hp / e.maxHp : 1
     const s = e.dist - (hpF < 0.3 ? 80 : 0) - (e.id === bb.mem.targetId ? 10 : 0)
     if (s < ts) {
@@ -550,10 +643,21 @@ function trainKite(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Intent, targ
       tg = e
     }
   }
+  if (focus) tg = target
   if (!tg) tg = target
   if (tg) {
     bb.mem.targetId = tg.id
     bb.mem.targetT = bb.t
+  }
+  // focus fire: finish a nearly dead primary / stand and shoot while the damage race is clearly ours
+  if (tg && !tg.npc && bb.los[tg.id] === 1 && bb.hpFrac >= P.focusFinishSelf) {
+    const fin = focusFinish(bb, tg)
+    if (fin || (P.focusStandRatio > 0 && fightRatio(bb, tg) >= P.focusStandRatio)) {
+      sc.trBoost = false
+      it.fight(tg.id, STYLE_HOLD, tg.dist, fin ? "fcFin" : "fcStand")
+      it.face = FACE_THREATS
+      return true
+    }
   }
   // route: replan every 0.5 s or near the waypoint
   if (!sc.trOk || bb.t - sc.trPlanT > 0.5 || Math.hypot(sc.trGX - bb.x, sc.trGY - bb.y) < 8) {
@@ -742,6 +846,11 @@ export function duelIntent(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Inte
   }
 
   const range = duelRange(bb, target)
+  // focus fire variant, kill confirmation: a nearly dead mech in line is finished from where we stand (no back-off)
+  if ((P.focusFinishHp > 0 || P.focusFinishS > 0) && focusFinish(bb, target)) {
+    it.fight(target.id, STYLE_HOLD, range, "fcFin")
+    return
+  }
   // sniper post variant: a laser target beyond the kite band with a clean line is fought from where we stand
   if (P.snipePost > 0 && bb.mode !== MODE_FFA && bb.haveLaser && !target.npc && bb.los[target.id] === 1 && target.dist > range + P.rangeBand && target.dist <= P.snipeMaxDist) {
     it.fight(target.id, STYLE_HOLD, range, "snipe")
@@ -863,7 +972,16 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     }
   }
   const it = bb.intent.reset()
-  const target = pickTarget(bb)
+  let target = pickTarget(bb)
+  // focus fire variant: the sticky primary mech replaces pickTarget's mech choice (NPC choices pass through)
+  if (P.focusFire > 0) {
+    const fc = focusTarget(bb, sc, target)
+    if (!(target && target.npc)) target = fc
+    else {
+      bb.mem.targetId = target.id
+      bb.mem.targetT = bb.t
+    }
+  }
   const zl = zoneDuty(bb, sc.zg)
 
   // 0'. opening jet scan: straight up to jetScan m above the ground while spinning, then fall back scanning

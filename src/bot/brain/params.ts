@@ -221,6 +221,28 @@ export const DEFAULTS = {
   kiteTrainDist: 0,
   /** ... never before this match time (s) */
   kiteTrainFrom: 0,
+  // ---- SQUAD focus fire (focus agent; all off by default). focusFire 1: one sticky primary mech target (squad.ts
+  //  focusTarget, used by every branch incl. train kiting) chosen by expected time to kill (current HP incl. cubes /
+  //  our DPS at its distance, so wounded ones first); kept until dead or without a shot line for focusHoldS s;
+  //  a challenger with a line takes over only when its time to kill is < focusSwitchK x the primary's; while any
+  //  mech with a line is below focusWound HP, a full-HP one is never chosen. While the primary has no line (within
+  //  focusHoldS) the best other mech with a line is shot (focusAlt 1) without becoming the primary
+  focusFire: 0,
+  focusHoldS: 3,
+  focusSwitchK: 0.5,
+  focusWound: 0.9,
+  focusAlt: 1,
+  /** ... kill confirmation: primary below this HP fraction with a line -> stand and shoot it (no train run, no
+   *  duel back-off) unless our HP fraction is below focusFinishSelf (0 = off) */
+  focusFinishHp: 0,
+  /** ... or when our expected time to kill it (current HP / our DPS at its distance) is at most this (s; 0 = off) */
+  focusFinishS: 0,
+  focusFinishSelf: 0.3,
+  /** ... only while at most this many other mechs are on us (shot at us within 3 s / aiming with a line; 99 = any) */
+  focusFinishCrowd: 99,
+  /** ... train kiting stands and shoots the primary instead of running while the damage race against everyone with
+   *  a line on us (fightRatio) is at least this (0 = off) */
+  focusStandRatio: 0,
   // ---- SQUAD roof fortress (fortress.ts; all off by default: fortOnUs 0 + fortT 999 + fortHp 0 + fortKills 0)
   /** trigger: at least this many visible mechs on us at once (shot at us within 3 s, aiming at us with a line, or
    *  within fortNearR) */
