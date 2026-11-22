@@ -259,6 +259,7 @@ export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, o
     const eta = (d / bb.walk) * 1.25 + extra
     const mz = zn.marginAt(it.x, it.y, bb.t + eta + 2)
     if (mz < 6) continue
+    if (zoneGuard && zoneOutside(bb, it.x, it.y, eta)) continue
     let s = val - tc * eta
     const mNext = zn.marginNext(it.x, it.y)
     if (mNext < 0 && zn.t0 - bb.t < 40) s += P.lootZoneCost * Math.max(-60, mNext) * 0.2
@@ -279,6 +280,7 @@ export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, o
       if (d > maxDist) continue
       const eta = (Math.max(0, d - 30) / bb.walk) * 1.25 + 3.5
       if (zn.marginAt(n.x, n.y, bb.t + eta + 3) < 10) continue
+      if (zoneGuard && zoneOutside(bb, n.x, n.y, eta)) continue
       let s = P.valNpc * cubeMult - tc * eta
       if (n.id === m.lootId) s += P.lootSwitchMargin
       if (s > best) {

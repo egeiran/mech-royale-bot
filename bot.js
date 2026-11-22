@@ -7101,6 +7101,17 @@ function lootTc(bb) {
 function healUntil(bb) {
   return bb.mode === MODE_SQUAD && bb.P.squadHealUntil >= 0 ? bb.P.squadHealUntil : bb.P.squadRegenUntil;
 }
+function zoneOutside(bb, x, y, etaS) {
+  const P = bb.P;
+  if (P.zoneGuard <= 0)
+    return false;
+  const zn = bb.zone;
+  const mn = zn.marginNext(x, y);
+  if (mn >= P.zoneMargin + P.zoneGuard)
+    return false;
+  const need = Math.max(0, P.zoneMargin - mn);
+  return zn.t0 - (bb.t + etaS) < need / bb.walk * 1.35 + P.zoneEarlyS + 2;
+}
 function bestLoot(bb, silentOnly, maxDist, out, zoneGuard = false) {
   const P = bb.P;
   const zn = bb.zone;
@@ -7144,6 +7155,8 @@ function bestLoot(bb, silentOnly, maxDist, out, zoneGuard = false) {
     const mz = zn.marginAt(it.x, it.y, bb.t + eta + 2);
     if (mz < 6)
       continue;
+    if (zoneGuard && zoneOutside(bb, it.x, it.y, eta))
+      continue;
     let s = val - tc * eta;
     const mNext = zn.marginNext(it.x, it.y);
     if (mNext < 0 && zn.t0 - bb.t < 40)
@@ -7169,6 +7182,8 @@ function bestLoot(bb, silentOnly, maxDist, out, zoneGuard = false) {
         continue;
       const eta = Math.max(0, d - 30) / bb.walk * 1.25 + 3.5;
       if (zn.marginAt(n.x, n.y, bb.t + eta + 3) < 10)
+        continue;
+      if (zoneGuard && zoneOutside(bb, n.x, n.y, eta))
         continue;
       let s = P.valNpc * cubeMult - tc * eta;
       if (n.id === m.lootId)
@@ -10090,5 +10105,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-N-s75.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 75, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, valDrop: 0 } });
+// src/entries/final-S-s80.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 80, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, dropSafeHp: 0.6, dropMaxLateS: 8 } });
