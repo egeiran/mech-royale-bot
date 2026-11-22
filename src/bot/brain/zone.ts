@@ -22,6 +22,17 @@ export class ZoneModel {
   t1 = 1e9
   dps = 0
   t = 0
+  /** the server's current radius (r may be inflated by the zone-out variant) */
+  trueR = 1e6
+  trueCx = 0
+  trueCy = 0
+  trueNcx = 0
+  trueNcy = 0
+  trueNr = 1e6
+  /** zone-out reference circle (set by inflate) */
+  refX = 0
+  refY = 0
+  refR = 1e6
   /** index into phases of the shrink described by (next, t0, t1); phases.length when all are done */
   phase = 0
   readonly phases: { hold_s: number; shrink_s: number; radius: number; dps: number }[]
@@ -47,6 +58,12 @@ export class ZoneModel {
     this.t0 = z.shrink_start
     this.t1 = z.shrink_end
     this.dps = z.dps
+    this.trueR = z.radius
+    this.trueCx = z.center[0]
+    this.trueCy = z.center[1]
+    this.trueNcx = z.next_center[0]
+    this.trueNcy = z.next_center[1]
+    this.trueNr = z.next_radius
     // which phase: the one whose target radius matches next_radius (closest)
     let best = this.phases.length
     let bd = 1e9
@@ -58,6 +75,30 @@ export class ZoneModel {
       }
     }
     this.phase = best
+  }
+
+  /**
+   * zone-out variant: the reference circle is the true one we will be left with (the next circle while a shrink is
+   * running, else the current one); pretend the zone is that circle grown by d m, with no shrink pending.
+   */
+  inflate(d: number): void {
+    const next = this.t >= this.t0 && this.t < this.t1
+    this.refX = next ? this.trueNcx : this.trueCx
+    this.refY = next ? this.trueNcy : this.trueCy
+    this.refR = next ? this.trueNr : this.trueR
+    this.cx = this.ncx = this.refX
+    this.cy = this.ncy = this.refY
+    this.r = this.nr = this.refR + d
+  }
+
+  /** metres inside the server's current circle (negative = outside), whatever inflate() did */
+  trueMargin(x: number, y: number): number {
+    return this.trueR - Math.hypot(x - this.trueCx, y - this.trueCy)
+  }
+
+  /** metres inside the zone-out reference circle (negative = outside) */
+  refMargin(x: number, y: number): number {
+    return this.refR - Math.hypot(x - this.refX, y - this.refY)
   }
 
   /** is the current shrink in progress */

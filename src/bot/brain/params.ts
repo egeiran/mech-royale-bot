@@ -126,6 +126,22 @@ export const DEFAULTS = {
    *  ground spot edgeHoldMargin m inside the next circle on the side away from the known mechs, scanning inward */
   edgeHold: 0,
   edgeHoldMargin: 45,
+  /** SQUAD zone-out variant (0 = off): from zoneOutT s stand zoneOutD m OUTSIDE the true zone edge and fight from there
+   *  (hunters either stay pinned at the edge at long range or follow us out and take zone damage like we do; the
+   *  bot's own zone logic then sees the circle zoneOutD + zoneOutSlack m larger). Given up for good (back inside)
+   *  when no mech was seen outside the true circle for zoneOutProbeS s while we were out, or below zoneOutHp HP with
+   *  no follower in the last 5 s. zoneOutLoot bounds loot trips meanwhile. zoneOutStayHp: with followers, below this
+   *  HP fraction we stay out anyway (0) / go back in (> 0). */
+  zoneOutT: 0,
+  zoneOutD: 100,
+  zoneOutSlack: 80,
+  zoneOutProbeS: 12,
+  zoneOutHp: 0.35,
+  zoneOutLoot: 40,
+  zoneOutStayHp: 0,
+  /** zone-out: only spots within this distance of us; give the variant up after zoneOutWaitS s without one */
+  zoneOutMaxGo: 260,
+  zoneOutWaitS: 25,
   /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
   seekSoundS: 0,
   /** SQUAD: reload before contact when the target is further than this and the mag is below reloadIdleFrac

@@ -121,6 +121,21 @@ export class SquadScratch {
   ehNy = 0
   ehNr = 0
   ehT = -1e9
+  /** zone-out variant: 0 not started, 1 active, 2 given up; activation time, first time outside the true circle,
+   *  last time a mech was seen outside it, pulling outward (hysteresis), chosen side (rad from the centre) + its time */
+  zoMode = 0
+  zoT0 = -1e9
+  zoOutT = -1
+  zoFollowT = -1e9
+  zoPull = false
+  zoAT = -1e9
+  zoOk = false
+  zoX = 0
+  zoY = 0
+  zoD = 0
+  zoNX = 0
+  zoNY = 0
+  zoND = 0
 }
 
 /**
@@ -1123,6 +1138,92 @@ export function underFire(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Inten
 }
 
 /** radial speed (m/s) at which a visible mech closes on us (averaged velocity; < 0 = moving away; 0 if not visible) */
+/**
+ * zone-out variant: keep us zoneOutD m outside the reference circle (the true circle we are left with; see params.ts
+ * zoneOut* and ZoneModel.inflate). Returns true when it wrote the intent (walking to the band outside); false = carry
+ * on with the normal steps (the zone model is inflated meanwhile).
+ */
+function zoneOutStep(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Intent, target: Track | null): boolean {
+  const P = bb.P
+  const zn = bb.zone
+  const w = bb.world
+  if (!w) return false
+  if (sc.zoMode === 0) {
+    // the first shrink must be under way (before it there is no outside on the map)
+    if (bb.t < zn.t0) return false
+    sc.zoMode = 1
+    sc.zoT0 = bb.t
+    sc.zoFollowT = bb.t
+    bb.zoneInflate = P.zoneOutD + P.zoneOutSlack
+    zn.inflate(bb.zoneInflate)
+  }
+  const mTrue = zn.trueMargin(bb.x, bb.y)
+  for (let i = 0; i < bb.nEn; i++) {
+    const e = bb.en[i]
+    if (!e.npc && zn.trueMargin(e.x, e.y) < -8) sc.zoFollowT = bb.t
+  }
+  if (mTrue < 0 && sc.zoOutT < 0) {
+    sc.zoOutT = bb.t
+    sc.zoFollowT = bb.t
+  }
+  const quiet = bb.t - sc.zoFollowT
+  let quit = false
+  if (sc.zoOutT >= 0 && bb.t - sc.zoOutT > P.zoneOutProbeS && quiet > P.zoneOutProbeS) quit = true
+  else if (bb.hpFrac < P.zoneOutHp && quiet > 5) quit = true
+  else if (P.zoneOutStayHp > 0 && bb.hpFrac < P.zoneOutStayHp) quit = true
+  // the spot: the nearest standable map ground zoneOutD (or, failing that, down to 60 m) outside the reference
+  // circle, within zoneOutMaxGo m of us; kept while it stays valid, re-searched every 3 s
+  if (!quit && bb.t - sc.zoAT > 3) {
+    sc.zoAT = bb.t
+    const f = getExposure(w)
+    const b = w.bounds
+    let bd = 1e9
+    for (let dep = P.zoneOutD; dep >= 59 && bd > 1e8; dep -= 15) {
+      const R = zn.refR + dep + 10
+      for (let k = 0; k < 72; k++) {
+        const a = (k * Math.PI) / 36
+        const x = zn.refX + R * Math.cos(a), y = zn.refY + R * Math.sin(a)
+        if (x < b.minX + 15 || x > b.maxX - 15 || y < b.minY + 15 || y > b.maxY - 15) continue
+        const c = cellOf(f, x, y)
+        if (!(f.flags[c]! & F_STAND) || f.edge[c]! < 3 || bb.isBadGoal(x, y)) continue
+        const d = Math.hypot(x - bb.x, y - bb.y) - (sc.zoOk && Math.hypot(x - sc.zoX, y - sc.zoY) < 25 ? 30 : 0)
+        if (d < bd) {
+          bd = d
+          sc.zoNX = x
+          sc.zoNY = y
+          sc.zoND = dep
+        }
+      }
+    }
+    if (bd < P.zoneOutMaxGo) {
+      sc.zoOk = true
+      sc.zoX = sc.zoNX
+      sc.zoY = sc.zoNY
+      sc.zoD = sc.zoND
+    } else {
+      sc.zoOk = false
+      // nowhere to go: give up unless a later, smaller circle may open room in time
+      if (bb.t - sc.zoT0 > P.zoneOutWaitS) quit = true
+    }
+  }
+  if (quit) {
+    sc.zoMode = 2
+    bb.zoneInflate = 0
+    return false
+  }
+  if (!sc.zoOk) return false
+  const m0 = zn.refMargin(bb.x, bb.y)
+  if (!sc.zoPull && m0 > -(sc.zoD - 25)) sc.zoPull = true
+  else if (sc.zoPull && m0 < -sc.zoD) sc.zoPull = false
+  if (!sc.zoPull) return false
+  it.goto(sc.zoX, sc.zoY, w.groundZ(sc.zoX, sc.zoY), bb.energy > 30 && m0 > 0 ? PACE_BOOST : PACE_WALK, "zout")
+  it.arrive = 3
+  it.allowJet = false
+  it.face = FACE_THREATS
+  if (target) it.targetId = target.id
+  return true
+}
+
 function closingOnUs(bb: Blackboard, e: Track): number {
   if (!e.visible || e.npc || e.dist < 1) return 0
   return -(e.vxAvg * (e.x - bb.x) + e.vyAvg * (e.y - bb.y)) / e.dist
@@ -1287,6 +1388,13 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     return it
   }
 
+  // 0z. zone-out variant: from zoneOutT stand outside the true circle (pinned or bleeding hunters)
+  if (P.zoneOutT > 0 && sc.zoMode < 2 && bb.t >= P.zoneOutT && zoneOutStep(bb, mv, sc, it, target)) {
+    weaponReflex(bb, it)
+    return it
+  }
+  const zoOn = sc.zoMode === 1
+
   // 1. zone
   if (zl >= 2) {
     zoneIntent(bb, sc.zg, it, target)
@@ -1401,6 +1509,8 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     }
     duelIntent(bb, mv, sc, it, target, true)
     if (P.dropDrift > 0 && it.kind === K_FIGHT) dropDriftGoal(bb, it)
+    // zone-out: a mech that stays inside the true circle is shot from where we stand (no walking back in)
+    if (zoOn && sc.zoOk && it.kind === K_FIGHT && !target.npc && target.dist > 35 && bb.zone.trueMargin(target.x, target.y) > -8 && bb.zone.refMargin(bb.x, bb.y) < 0) it.fight(target.id, STYLE_HOLD, target.dist, "zoHold")
     // no laser: do not empty the magazine at long range on a healthy mech (22 % hits beyond 120 m)
     if (P.gunFarDist > 0 && !bb.haveLaser && target.dist > P.gunFarDist && (target.hp < 0 || target.hp > P.gunFarHp * target.maxHp)) it.weaponsFree = false
     // a mech that has not noticed us: close in silently, open fire only from ambushDist (full magazine, it
@@ -1509,7 +1619,8 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
     return it
   }
   // centre / edge hold variants with centerHoldLoot: only loot that close to us (the rest of the time is spent holding)
-  const lootD = (P.centerHold > 0 || P.edgeHold > 0) && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist
+  const lootD0 = (P.centerHold > 0 || P.edgeHold > 0) && P.centerHoldLoot > 0 && bb.t >= P.centerHoldFrom ? Math.min(P.lootMaxDist, P.centerHoldLoot) : P.lootMaxDist
+  const lootD = zoOn ? Math.min(lootD0, P.zoneOutLoot) : lootD0
   if (bestLoot(bb, hurt && bb.regenIn <= 0.01 ? true : hurt && bb.hpFrac < P.healLootHp, lootD, sc.lc, P.zoneGuard > 0)) {
     lootIntent(bb, sc.lc, it, PACE_WALK)
     // crate stand-off variant: standing at a crate for 5 s without denting it (no line, out of the pitch range)
@@ -1534,6 +1645,18 @@ function decideSquadCore(bb: Blackboard, mv: Mover, sc: SquadScratch): Intent {
   if (hurt) {
     it.hold(bb.x, bb.y, bb.z, "heal")
     it.face = recentEnemy ? FACE_THREATS : FACE_SCAN
+    weaponReflex(bb, it)
+    return it
+  }
+
+  // zone-out: nothing to do out here -> hold and watch the circle
+  if (zoOn && sc.zoOk && bb.zone.refMargin(bb.x, bb.y) < 0) {
+    it.hold(bb.x, bb.y, bb.z, "zoWait")
+    it.face = FACE_SCAN
+    if (bb.t - bb.tHurt >= P.lookDamageS) {
+      it.face = FACE_YAW
+      it.faceYaw = Math.atan2(bb.zone.cy - bb.y, bb.zone.cx - bb.x) + Math.sin(bb.t * P.scanFreq) * P.scanAmp
+    }
     weaponReflex(bb, it)
     return it
   }

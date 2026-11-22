@@ -231,6 +231,8 @@ export class Blackboard {
   turnRate = 4
   dmgMult = 1
   inZone = true
+  /** zone-out variant: metres the strategy wants the zone model inflated by (0 = off) */
+  zoneInflate = 0
   grounded = true
 
   // ---- weapons
@@ -402,6 +404,10 @@ export class Blackboard {
     else if (this.squadLocked || det === MODE_SQUAD || obs.t >= unknownUntil) mode = MODE_SQUAD
     this.mode = this.P.forceMode === 1 ? MODE_SQUAD : this.P.forceMode === 2 ? MODE_FFA : mode
     this.zone.update(obs.zone, obs.t)
+    if (this.zoneInflate > 0) {
+      this.zone.inflate(this.zoneInflate)
+      this.inZone = this.zone.margin(this.x, this.y) >= 0
+    }
     this.loot.update(obs, this.world, this.cfg, this.P.lootForgetS)
     this.drops = obs.drops ?? []
 
