@@ -1139,6 +1139,46 @@ export function underFire(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Inten
 
 /** radial speed (m/s) at which a visible mech closes on us (averaged velocity; < 0 = moving away; 0 if not visible) */
 /**
+ * zone-out spot: the nearest standable map ground zoneOutD (or, failing that, down to 60 m) outside the reference
+ * circle, within zoneOutMaxGo m of us; into sc.zoX/Y/D, sc.zoOk
+ */
+function zoneOutSpot(bb: Blackboard, sc: SquadScratch): boolean {
+  const P = bb.P
+  const zn = bb.zone
+  const w = bb.world!
+  const f = getExposure(w)
+  const b = w.bounds
+  let bd = 1e9
+  // the deepest ring that has a spot in reach
+  for (let dep = P.zoneOutD; dep >= 59 && bd >= P.zoneOutMaxGo; dep -= 15) {
+    bd = 1e9
+    const R = zn.refR + dep + 10
+    for (let k = 0; k < 72; k++) {
+      const a = (k * Math.PI) / 36
+      const x = zn.refX + R * Math.cos(a), y = zn.refY + R * Math.sin(a)
+      if (x < b.minX + 15 || x > b.maxX - 15 || y < b.minY + 15 || y > b.maxY - 15) continue
+      const c = cellOf(f, x, y)
+      if (!(f.flags[c]! & F_STAND) || f.edge[c]! < 3 || bb.isBadGoal(x, y)) continue
+      const d = Math.hypot(x - bb.x, y - bb.y) - (sc.zoOk && Math.hypot(x - sc.zoX, y - sc.zoY) < 25 ? 30 : 0)
+      if (d < bd) {
+        bd = d
+        sc.zoNX = x
+        sc.zoNY = y
+        sc.zoND = dep
+      }
+    }
+  }
+  if (bd < P.zoneOutMaxGo) {
+    sc.zoOk = true
+    sc.zoX = sc.zoNX
+    sc.zoY = sc.zoNY
+    sc.zoD = sc.zoND
+  } else sc.zoOk = false
+  return sc.zoOk
+}
+
+const ZO_DEBUG = typeof process !== "undefined" && process.env.ZO_DEBUG === "1"
+/**
  * zone-out variant: keep us zoneOutD m outside the reference circle (the true circle we are left with; see params.ts
  * zoneOut* and ZoneModel.inflate). Returns true when it wrote the intent (walking to the band outside); false = carry
  * on with the normal steps (the zone model is inflated meanwhile).
@@ -1151,6 +1191,18 @@ function zoneOutStep(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Intent, ta
   if (sc.zoMode === 0) {
     // the first shrink must be under way (before it there is no outside on the map)
     if (bb.t < zn.t0) return false
+    // pack trigger (zoneOutOnUs): only once that many visible mechs shoot / aim at us, and only with a spot in reach
+    if (P.zoneOutOnUs > 0) {
+      let onUs = 0
+      for (let i = 0; i < bb.nEn; i++) {
+        const e = bb.en[i]
+        if (!e.npc && (bb.t - e.tShotAtUs < 3 || (e.aimingAtUs && bb.los[e.id] === 1))) onUs++
+      }
+      if (onUs < P.zoneOutOnUs && !(P.zoneOutOnUsHp > 0 && onUs >= P.zoneOutOnUs - 1 && onUs >= 1 && bb.hpFrac < P.zoneOutOnUsHp)) return false
+      zn.setRef()
+      if (!zoneOutSpot(bb, sc)) return false
+      sc.zoAT = bb.t
+    }
     sc.zoMode = 1
     sc.zoT0 = bb.t
     sc.zoFollowT = bb.t
@@ -1161,54 +1213,29 @@ function zoneOutStep(bb: Blackboard, mv: Mover, sc: SquadScratch, it: Intent, ta
   for (let i = 0; i < bb.nEn; i++) {
     const e = bb.en[i]
     if (!e.npc && zn.trueMargin(e.x, e.y) < -8) sc.zoFollowT = bb.t
+    // zoneOutHits: a mech we are hitting from out here counts like a follower (pinned at the edge, we out-range it)
+    else if (P.zoneOutHits > 0 && !e.npc && mTrue < 0 && bb.t - e.tHitByUs < 1) sc.zoFollowT = bb.t
   }
   if (mTrue < 0 && sc.zoOutT < 0) {
     sc.zoOutT = bb.t
     sc.zoFollowT = bb.t
+    if (ZO_DEBUG) console.error(`ZO out t=${bb.t.toFixed(0)} hp=${bb.hpFrac.toFixed(2)}`)
   }
   const quiet = bb.t - sc.zoFollowT
   let quit = false
   if (sc.zoOutT >= 0 && bb.t - sc.zoOutT > P.zoneOutProbeS && quiet > P.zoneOutProbeS) quit = true
   else if (bb.hpFrac < P.zoneOutHp && quiet > 5) quit = true
   else if (P.zoneOutStayHp > 0 && bb.hpFrac < P.zoneOutStayHp) quit = true
-  // the spot: the nearest standable map ground zoneOutD (or, failing that, down to 60 m) outside the reference
-  // circle, within zoneOutMaxGo m of us; kept while it stays valid, re-searched every 3 s
+  // the spot: kept while it stays valid, re-searched every 3 s
   if (!quit && bb.t - sc.zoAT > 3) {
     sc.zoAT = bb.t
-    const f = getExposure(w)
-    const b = w.bounds
-    let bd = 1e9
-    for (let dep = P.zoneOutD; dep >= 59 && bd > 1e8; dep -= 15) {
-      const R = zn.refR + dep + 10
-      for (let k = 0; k < 72; k++) {
-        const a = (k * Math.PI) / 36
-        const x = zn.refX + R * Math.cos(a), y = zn.refY + R * Math.sin(a)
-        if (x < b.minX + 15 || x > b.maxX - 15 || y < b.minY + 15 || y > b.maxY - 15) continue
-        const c = cellOf(f, x, y)
-        if (!(f.flags[c]! & F_STAND) || f.edge[c]! < 3 || bb.isBadGoal(x, y)) continue
-        const d = Math.hypot(x - bb.x, y - bb.y) - (sc.zoOk && Math.hypot(x - sc.zoX, y - sc.zoY) < 25 ? 30 : 0)
-        if (d < bd) {
-          bd = d
-          sc.zoNX = x
-          sc.zoNY = y
-          sc.zoND = dep
-        }
-      }
-    }
-    if (bd < P.zoneOutMaxGo) {
-      sc.zoOk = true
-      sc.zoX = sc.zoNX
-      sc.zoY = sc.zoNY
-      sc.zoD = sc.zoND
-    } else {
-      sc.zoOk = false
-      // nowhere to go: give up unless a later, smaller circle may open room in time
-      if (bb.t - sc.zoT0 > P.zoneOutWaitS) quit = true
-    }
+    // nowhere to go: give up unless a later, smaller circle may open room in time
+    if (!zoneOutSpot(bb, sc) && bb.t - sc.zoT0 > P.zoneOutWaitS) quit = true
   }
   if (quit) {
     sc.zoMode = 2
     bb.zoneInflate = 0
+    if (ZO_DEBUG) console.error(`ZO quit t=${bb.t.toFixed(0)} hp=${bb.hpFrac.toFixed(2)} out=${sc.zoOutT.toFixed(0)} ok=${sc.zoOk} quiet=${(bb.t - sc.zoFollowT).toFixed(0)}`)
     return false
   }
   if (!sc.zoOk) return false

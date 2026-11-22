@@ -2436,13 +2436,16 @@ class ZoneModel {
     this.phase = best;
   }
   inflate(d) {
+    this.setRef();
+    this.cx = this.ncx = this.refX;
+    this.cy = this.ncy = this.refY;
+    this.r = this.nr = this.refR + d;
+  }
+  setRef() {
     const next = this.t >= this.t0 && this.t < this.t1;
     this.refX = next ? this.trueNcx : this.trueCx;
     this.refY = next ? this.trueNcy : this.trueCy;
     this.refR = next ? this.trueNr : this.trueR;
-    this.cx = this.ncx = this.refX;
-    this.cy = this.ncy = this.refY;
-    this.r = this.nr = this.refR + d;
   }
   trueMargin(x, y) {
     return this.trueR - Math.hypot(x - this.trueCx, y - this.trueCy);
@@ -6760,6 +6763,9 @@ var DEFAULTS = {
   zoneOutStayHp: 0,
   zoneOutMaxGo: 260,
   zoneOutWaitS: 25,
+  zoneOutHits: 0,
+  zoneOutOnUs: 0,
+  zoneOutOnUsHp: 0,
   seekSoundS: 0,
   reloadFarDist: 999,
   shieldOrbit: 0.3,
@@ -9436,6 +9442,43 @@ function underFire(bb, mv, sc, it) {
   it.face = FACE_THREATS;
   return true;
 }
+function zoneOutSpot(bb, sc) {
+  const P = bb.P;
+  const zn = bb.zone;
+  const w = bb.world;
+  const f = getExposure(w);
+  const b = w.bounds;
+  let bd = 1e9;
+  for (let dep = P.zoneOutD;dep >= 59 && bd >= P.zoneOutMaxGo; dep -= 15) {
+    bd = 1e9;
+    const R = zn.refR + dep + 10;
+    for (let k = 0;k < 72; k++) {
+      const a = k * Math.PI / 36;
+      const x = zn.refX + R * Math.cos(a), y = zn.refY + R * Math.sin(a);
+      if (x < b.minX + 15 || x > b.maxX - 15 || y < b.minY + 15 || y > b.maxY - 15)
+        continue;
+      const c = cellOf(f, x, y);
+      if (!(f.flags[c] & F_STAND) || f.edge[c] < 3 || bb.isBadGoal(x, y))
+        continue;
+      const d = Math.hypot(x - bb.x, y - bb.y) - (sc.zoOk && Math.hypot(x - sc.zoX, y - sc.zoY) < 25 ? 30 : 0);
+      if (d < bd) {
+        bd = d;
+        sc.zoNX = x;
+        sc.zoNY = y;
+        sc.zoND = dep;
+      }
+    }
+  }
+  if (bd < P.zoneOutMaxGo) {
+    sc.zoOk = true;
+    sc.zoX = sc.zoNX;
+    sc.zoY = sc.zoNY;
+    sc.zoD = sc.zoND;
+  } else
+    sc.zoOk = false;
+  return sc.zoOk;
+}
+var ZO_DEBUG = typeof process !== "undefined" && process.env.ZO_DEBUG === "1";
 function zoneOutStep(bb, mv, sc, it, target) {
   const P = bb.P;
   const zn = bb.zone;
@@ -9445,6 +9488,20 @@ function zoneOutStep(bb, mv, sc, it, target) {
   if (sc.zoMode === 0) {
     if (bb.t < zn.t0)
       return false;
+    if (P.zoneOutOnUs > 0) {
+      let onUs = 0;
+      for (let i = 0;i < bb.nEn; i++) {
+        const e = bb.en[i];
+        if (!e.npc && (bb.t - e.tShotAtUs < 3 || e.aimingAtUs && bb.los[e.id] === 1))
+          onUs++;
+      }
+      if (onUs < P.zoneOutOnUs && !(P.zoneOutOnUsHp > 0 && onUs >= P.zoneOutOnUs - 1 && onUs >= 1 && bb.hpFrac < P.zoneOutOnUsHp))
+        return false;
+      zn.setRef();
+      if (!zoneOutSpot(bb, sc))
+        return false;
+      sc.zoAT = bb.t;
+    }
     sc.zoMode = 1;
     sc.zoT0 = bb.t;
     sc.zoFollowT = bb.t;
@@ -9456,10 +9513,14 @@ function zoneOutStep(bb, mv, sc, it, target) {
     const e = bb.en[i];
     if (!e.npc && zn.trueMargin(e.x, e.y) < -8)
       sc.zoFollowT = bb.t;
+    else if (P.zoneOutHits > 0 && !e.npc && mTrue < 0 && bb.t - e.tHitByUs < 1)
+      sc.zoFollowT = bb.t;
   }
   if (mTrue < 0 && sc.zoOutT < 0) {
     sc.zoOutT = bb.t;
     sc.zoFollowT = bb.t;
+    if (ZO_DEBUG)
+      console.error(`ZO out t=${bb.t.toFixed(0)} hp=${bb.hpFrac.toFixed(2)}`);
   }
   const quiet = bb.t - sc.zoFollowT;
   let quit = false;
@@ -9471,42 +9532,14 @@ function zoneOutStep(bb, mv, sc, it, target) {
     quit = true;
   if (!quit && bb.t - sc.zoAT > 3) {
     sc.zoAT = bb.t;
-    const f = getExposure(w);
-    const b = w.bounds;
-    let bd = 1e9;
-    for (let dep = P.zoneOutD;dep >= 59 && bd > 1e8; dep -= 15) {
-      const R = zn.refR + dep + 10;
-      for (let k = 0;k < 72; k++) {
-        const a = k * Math.PI / 36;
-        const x = zn.refX + R * Math.cos(a), y = zn.refY + R * Math.sin(a);
-        if (x < b.minX + 15 || x > b.maxX - 15 || y < b.minY + 15 || y > b.maxY - 15)
-          continue;
-        const c = cellOf(f, x, y);
-        if (!(f.flags[c] & F_STAND) || f.edge[c] < 3 || bb.isBadGoal(x, y))
-          continue;
-        const d = Math.hypot(x - bb.x, y - bb.y) - (sc.zoOk && Math.hypot(x - sc.zoX, y - sc.zoY) < 25 ? 30 : 0);
-        if (d < bd) {
-          bd = d;
-          sc.zoNX = x;
-          sc.zoNY = y;
-          sc.zoND = dep;
-        }
-      }
-    }
-    if (bd < P.zoneOutMaxGo) {
-      sc.zoOk = true;
-      sc.zoX = sc.zoNX;
-      sc.zoY = sc.zoNY;
-      sc.zoD = sc.zoND;
-    } else {
-      sc.zoOk = false;
-      if (bb.t - sc.zoT0 > P.zoneOutWaitS)
-        quit = true;
-    }
+    if (!zoneOutSpot(bb, sc) && bb.t - sc.zoT0 > P.zoneOutWaitS)
+      quit = true;
   }
   if (quit) {
     sc.zoMode = 2;
     bb.zoneInflate = 0;
+    if (ZO_DEBUG)
+      console.error(`ZO quit t=${bb.t.toFixed(0)} hp=${bb.hpFrac.toFixed(2)} out=${sc.zoOutT.toFixed(0)} ok=${sc.zoOk} quiet=${(bb.t - sc.zoFollowT).toFixed(0)}`);
     return false;
   }
   if (!sc.zoOk)
@@ -11633,5 +11666,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/v4-gunmag-zoneout.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1, rushZone1: 1, rangeGunOnly: 55, upGunMag: 105, modeGapMs: 12, zoneOutT: 92 } });
+// src/entries/v4-gunmag-zoneout-hits.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 210, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapUnknownS: 30, crateReflexDist: 60, crateScan: 1, crateLaserW: 1, crateReflexSafe: 100, kiteTrainN: 2, kiteTrainDist: 120, kiteTrainBoostDist: 130, kiteTrainBoostE: 30, kiteTrainFrom: 60, seekSoundS: 0, engageDist: 50, valNpc: 45, valCrate: 30, valCube: 20, npcMinHp: 0.35, valDrop: 0, rushNoScan: 150, rushBoostHi: 60, laserRushEnergy: 20, rushRoofFight: 25, rushForceJet: 1, rushZone1: 1, rangeGunOnly: 55, upGunMag: 105, modeGapMs: 12, zoneOutT: 92, zoneOutHits: 1, zoneOutD: 115 } });

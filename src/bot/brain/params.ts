@@ -142,6 +142,12 @@ export const DEFAULTS = {
   /** zone-out: only spots within this distance of us; give the variant up after zoneOutWaitS s without one */
   zoneOutMaxGo: 260,
   zoneOutWaitS: 25,
+  /** zone-out: 1 = while we keep hitting mechs from outside, stay out as if they had followed */
+  zoneOutHits: 0,
+  /** zone-out pack trigger: start only when this many visible mechs shoot / aim at us (0 = at zoneOutT), or one
+   *  fewer while we are below zoneOutOnUsHp; and only if a spot lies within zoneOutMaxGo right then */
+  zoneOutOnUs: 0,
+  zoneOutOnUsHp: 0,
   /** SQUAD: nobody known -> walk toward armed-mech sounds heard within this many seconds (0 = off) */
   seekSoundS: 0,
   /** SQUAD: reload before contact when the target is further than this and the mag is below reloadIdleFrac

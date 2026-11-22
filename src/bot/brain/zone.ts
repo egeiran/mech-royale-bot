@@ -82,13 +82,18 @@ export class ZoneModel {
    * running, else the current one); pretend the zone is that circle grown by d m, with no shrink pending.
    */
   inflate(d: number): void {
+    this.setRef()
+    this.cx = this.ncx = this.refX
+    this.cy = this.ncy = this.refY
+    this.r = this.nr = this.refR + d
+  }
+
+  /** zone-out reference circle from the server's circles (no change to the model's own circle) */
+  setRef(): void {
     const next = this.t >= this.t0 && this.t < this.t1
     this.refX = next ? this.trueNcx : this.trueCx
     this.refY = next ? this.trueNcy : this.trueCy
     this.refR = next ? this.trueNr : this.trueR
-    this.cx = this.ncx = this.refX
-    this.cy = this.ncy = this.refY
-    this.r = this.nr = this.refR + d
   }
 
   /** metres inside the server's current circle (negative = outside), whatever inflate() did */
