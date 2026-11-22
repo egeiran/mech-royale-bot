@@ -206,10 +206,25 @@ export function healUntil(bb: Blackboard): number {
 }
 
 /**
- * Best loot goal by utility = value - time cost. `silentOnly` skips everything that needs shooting (crates,
- * NPCs); `maxDist` bounds the search. Hysteresis through mem.lootId.
+ * Zone guard (P.zoneGuard m, 0 = off -> always false): (x, y) lies where zoneDuty would ask for level 1 when we get
+ * there in etaS s, widened by zoneGuard m (hysteresis). A goal like that, chosen at level 0, makes the decision
+ * flip-flop: walk out, level 1, walk in, level 0, ... (play server: 50 s = 7 % of alive time, data/intel/play2.md L2)
  */
-export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, out: LootChoice): boolean {
+export function zoneOutside(bb: Blackboard, x: number, y: number, etaS: number): boolean {
+  const P = bb.P
+  if (P.zoneGuard <= 0) return false
+  const zn = bb.zone
+  const mn = zn.marginNext(x, y)
+  if (mn >= P.zoneMargin + P.zoneGuard) return false
+  const need = Math.max(0, P.zoneMargin - mn)
+  return zn.t0 - (bb.t + etaS) < (need / bb.walk) * 1.35 + P.zoneEarlyS + 2
+}
+
+/**
+ * Best loot goal by utility = value - time cost. `silentOnly` skips everything that needs shooting (crates,
+ * NPCs); `maxDist` bounds the search. Hysteresis through mem.lootId. `zoneGuard`: skip goals zoneOutside().
+ */
+export function bestLoot(bb: Blackboard, silentOnly: boolean, maxDist: number, out: LootChoice, zoneGuard = false): boolean {
   const P = bb.P
   const zn = bb.zone
   const m = bb.mem

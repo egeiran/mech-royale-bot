@@ -7101,7 +7101,7 @@ function lootTc(bb) {
 function healUntil(bb) {
   return bb.mode === MODE_SQUAD && bb.P.squadHealUntil >= 0 ? bb.P.squadHealUntil : bb.P.squadRegenUntil;
 }
-function bestLoot(bb, silentOnly, maxDist, out) {
+function bestLoot(bb, silentOnly, maxDist, out, zoneGuard = false) {
   const P = bb.P;
   const zn = bb.zone;
   const m = bb.mem;
@@ -10090,5 +10090,5 @@ function warmup(bot, hello, decisions = 240) {
   }
 }
 
-// src/entries/final-N-s73.ts
-runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 73, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, valDrop: 0 } });
+// src/entries/final-N-s74.ts
+runProcess({ name: BOT_NAME, factory: mainBot, loadWorld, warmup, salt: 74, params: { style: 1, seekSoundS: 8, npcFirstDist: 45, dropFightLeadS: 0, squadDisengageHp: 0, rangeGun: 25, jetScan: 20, laserRush: 220, ltgVetoLaser: 220, navWatchdogS: 5, modeDeathsN: 2, modeSquadLockT: 30, modeGapMs: 40, modeGapUnknownS: 30, valDrop: 0 } });
